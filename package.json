@@ -1,0 +1,20 @@
+{
+  "name": "dew-care-backend",
+  "scripts": {
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.x.x",
+    "multer": "^2.2.0",
+    "nodemailer": "^7.x.x",
+    "razorpay": "^2.9.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.x.x"
+  }
+}
