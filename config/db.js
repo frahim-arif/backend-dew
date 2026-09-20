@@ -49,5 +49,4 @@ const connectDB = async () => {
     throw error;
   }
 };
-
 module.exports = connectDB;
