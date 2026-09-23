@@ -21,11 +21,6 @@ const parseOpdDays = (opdDays) => {
 
 exports.createDoctor = async (req, res) => {
   try {
-    console.log("========================================");
-    console.log("🩺 CREATE DOCTOR REQUEST");
-    console.log("Body:", req.body);
-    console.log("File:", req.file);
-
     const doctor = await Doctor.create({
       name: req.body.name,
       specialist: req.body.specialist,
@@ -39,13 +34,9 @@ exports.createDoctor = async (req, res) => {
 
       slotDuration: Number(req.body.slotDuration || 15),
       maxPatientsPerDay: Number(req.body.maxPatientsPerDay || 30),
-
       status: req.body.status || "Active",
-
       image: req.file ? `/uploads/${req.file.filename}` : "",
     });
-
-    console.log("✅ Doctor created:", doctor._id);
 
     res.status(201).json({
       success: true,
@@ -53,18 +44,10 @@ exports.createDoctor = async (req, res) => {
       data: doctor,
     });
   } catch (error) {
-    console.error("========================================");
-    console.error("❌ CREATE DOCTOR ERROR");
-    console.error("Name:", error.name);
-    console.error("Message:", error.message);
-    console.error("Code:", error.code);
-    console.error("Errors:", error.errors);
-    console.error("Stack:", error.stack);
-    console.error("========================================");
-
+    console.error(error);
     res.status(500).json({
       success: false,
-      message: error.message || "Server error while adding doctor",
+      message: "Server error while adding doctor",
     });
   }
 };
