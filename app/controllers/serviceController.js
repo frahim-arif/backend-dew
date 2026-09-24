@@ -1,16 +1,4 @@
-const fs = require("fs");
-const path = require("path");
 const Service = require("../models/Service");
-
-const deleteFile = (filePath) => {
-  if (!filePath) return;
-
-  const fullPath = path.join(__dirname, "../../", filePath.replace("/", ""));
-
-  if (fs.existsSync(fullPath)) {
-    fs.unlinkSync(fullPath);
-  }
-};
 
 exports.createService = async (req, res) => {
   try {
@@ -19,7 +7,9 @@ exports.createService = async (req, res) => {
       desc: req.body.desc,
       icon: req.body.icon,
       status: req.body.status || "Active",
-      image: req.file ? `/uploads/${req.file.filename}` : "",
+
+      // Cloudinary image URL
+      image: req.file ? req.file.path : "",
     });
 
     res.status(201).json({
@@ -28,16 +18,21 @@ exports.createService = async (req, res) => {
       data: service,
     });
   } catch (error) {
+    console.error("CREATE SERVICE ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while adding service",
+      error: error.message,
     });
   }
 };
 
 exports.getServices = async (req, res) => {
   try {
-    const services = await Service.find().sort({ createdAt: -1 });
+    const services = await Service.find().sort({
+      createdAt: -1,
+    });
 
     res.json({
       success: true,
@@ -45,6 +40,8 @@ exports.getServices = async (req, res) => {
       data: services,
     });
   } catch (error) {
+    console.error("GET SERVICES ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while fetching services",
@@ -68,9 +65,9 @@ exports.updateService = async (req, res) => {
     service.icon = req.body.icon;
     service.status = req.body.status || service.status;
 
+    // New image uploaded
     if (req.file) {
-      deleteFile(service.image);
-      service.image = `/uploads/${req.file.filename}`;
+      service.image = req.file.path;
     }
 
     await service.save();
@@ -81,9 +78,12 @@ exports.updateService = async (req, res) => {
       data: service,
     });
   } catch (error) {
+    console.error("UPDATE SERVICE ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while updating service",
+      error: error.message,
     });
   }
 };
@@ -99,7 +99,6 @@ exports.deleteService = async (req, res) => {
       });
     }
 
-    deleteFile(service.image);
     await service.deleteOne();
 
     res.json({
@@ -107,6 +106,8 @@ exports.deleteService = async (req, res) => {
       message: "Service deleted",
     });
   } catch (error) {
+    console.error("DELETE SERVICE ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while deleting service",

@@ -1,20 +1,4 @@
-const fs = require("fs");
-const path = require("path");
 const Facility = require("../models/Facility");
-
-const deleteFile = (filePath) => {
-  if (!filePath) return;
-
-  const fullPath = path.join(
-    __dirname,
-    "../../",
-    filePath.replace("/", "")
-  );
-
-  if (fs.existsSync(fullPath)) {
-    fs.unlinkSync(fullPath);
-  }
-};
 
 exports.createFacility = async (req, res) => {
   try {
@@ -24,7 +8,9 @@ exports.createFacility = async (req, res) => {
       icon: req.body.icon,
       category: req.body.category || "General",
       status: req.body.status || "Active",
-      image: req.file ? `/uploads/${req.file.filename}` : "",
+
+      // Cloudinary image URL
+      image: req.file ? req.file.path : "",
     });
 
     res.status(201).json({
@@ -33,16 +19,21 @@ exports.createFacility = async (req, res) => {
       data: facility,
     });
   } catch (error) {
+    console.error("CREATE FACILITY ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while adding facility",
+      error: error.message,
     });
   }
 };
 
 exports.getFacilities = async (req, res) => {
   try {
-    const facilities = await Facility.find().sort({ createdAt: -1 });
+    const facilities = await Facility.find().sort({
+      createdAt: -1,
+    });
 
     res.json({
       success: true,
@@ -50,6 +41,8 @@ exports.getFacilities = async (req, res) => {
       data: facilities,
     });
   } catch (error) {
+    console.error("GET FACILITIES ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while fetching facilities",
@@ -74,9 +67,9 @@ exports.updateFacility = async (req, res) => {
     facility.category = req.body.category || facility.category;
     facility.status = req.body.status || facility.status;
 
+    // New image uploaded
     if (req.file) {
-      deleteFile(facility.image);
-      facility.image = `/uploads/${req.file.filename}`;
+      facility.image = req.file.path;
     }
 
     await facility.save();
@@ -87,9 +80,12 @@ exports.updateFacility = async (req, res) => {
       data: facility,
     });
   } catch (error) {
+    console.error("UPDATE FACILITY ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while updating facility",
+      error: error.message,
     });
   }
 };
@@ -105,7 +101,6 @@ exports.deleteFacility = async (req, res) => {
       });
     }
 
-    deleteFile(facility.image);
     await facility.deleteOne();
 
     res.json({
@@ -113,9 +108,12 @@ exports.deleteFacility = async (req, res) => {
       message: "Facility deleted",
     });
   } catch (error) {
+    console.error("DELETE FACILITY ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while deleting facility",
+      error: error.message,
     });
   }
 };

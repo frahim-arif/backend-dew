@@ -1,5 +1,3 @@
-const fs = require("fs");
-const path = require("path");
 const Doctor = require("../models/Doctor");
 
 const parseOpdDays = (opdDays) => {
@@ -34,8 +32,11 @@ exports.createDoctor = async (req, res) => {
 
       slotDuration: Number(req.body.slotDuration || 15),
       maxPatientsPerDay: Number(req.body.maxPatientsPerDay || 30),
+
       status: req.body.status || "Active",
-      image: req.file ? `/uploads/${req.file.filename}` : "",
+
+      // Cloudinary URL
+      image: req.file ? req.file.path : "",
     });
 
     res.status(201).json({
@@ -44,17 +45,21 @@ exports.createDoctor = async (req, res) => {
       data: doctor,
     });
   } catch (error) {
-    console.error(error);
+    console.error("CREATE DOCTOR ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while adding doctor",
+      error: error.message,
     });
   }
 };
 
 exports.getDoctors = async (req, res) => {
   try {
-    const doctors = await Doctor.find().sort({ createdAt: -1 });
+    const doctors = await Doctor.find().sort({
+      createdAt: -1,
+    });
 
     res.json({
       success: true,
@@ -62,6 +67,8 @@ exports.getDoctors = async (req, res) => {
       data: doctors,
     });
   } catch (error) {
+    console.error("GET DOCTORS ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while fetching doctors",
@@ -91,23 +98,15 @@ exports.updateDoctor = async (req, res) => {
     doctor.opdDays = parseOpdDays(req.body.opdDays);
 
     doctor.slotDuration = Number(req.body.slotDuration || 15);
-    doctor.maxPatientsPerDay = Number(req.body.maxPatientsPerDay || 30);
+    doctor.maxPatientsPerDay = Number(
+      req.body.maxPatientsPerDay || 30
+    );
+
     doctor.status = req.body.status || "Active";
 
+    // New image uploaded
     if (req.file) {
-      if (doctor.image) {
-        const oldPath = path.join(
-          __dirname,
-          "../../",
-          doctor.image.replace("/", "")
-        );
-
-        if (fs.existsSync(oldPath)) {
-          fs.unlinkSync(oldPath);
-        }
-      }
-
-      doctor.image = `/uploads/${req.file.filename}`;
+      doctor.image = req.file.path;
     }
 
     await doctor.save();
@@ -118,10 +117,12 @@ exports.updateDoctor = async (req, res) => {
       data: doctor,
     });
   } catch (error) {
-    console.error(error);
+    console.error("UPDATE DOCTOR ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while updating doctor",
+      error: error.message,
     });
   }
 };
@@ -137,18 +138,6 @@ exports.deleteDoctor = async (req, res) => {
       });
     }
 
-    if (doctor.image) {
-      const filePath = path.join(
-        __dirname,
-        "../../",
-        doctor.image.replace("/", "")
-      );
-
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    }
-
     await doctor.deleteOne();
 
     res.json({
@@ -156,9 +145,12 @@ exports.deleteDoctor = async (req, res) => {
       message: "Doctor deleted successfully",
     });
   } catch (error) {
+    console.error("DELETE DOCTOR ERROR:", error);
+
     res.status(500).json({
       success: false,
       message: "Server error while deleting doctor",
+      error: error.message,
     });
   }
 };
