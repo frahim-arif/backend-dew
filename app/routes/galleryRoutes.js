@@ -66,7 +66,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10 MB
+    fileSize: 10 * 1024 * 1024,
   },
 });
 
@@ -82,7 +82,10 @@ router.post(
 );
 
 // Get All Gallery
-router.get("/", getGallery);
+router.get(
+  "/",
+  getGallery
+);
 
 // Update Gallery
 router.put(
@@ -92,6 +95,9 @@ router.put(
 );
 
 // Delete Gallery
-router.delete("/:id", deleteGallery);
+router.delete(
+  "/:id",
+  deleteGallery
+);
 
 module.exports = router;

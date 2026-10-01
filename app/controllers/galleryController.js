@@ -2,9 +2,34 @@ const fs = require("fs");
 const path = require("path");
 const Gallery = require("../models/Gallery");
 
-// =======================
-// Create Gallery
-// =======================
+// ======================================================
+// Helper: Delete Image File
+// ======================================================
+
+const deleteImageFile = (imagePath) => {
+  if (!imagePath) return;
+
+  const oldPath = path.join(
+    __dirname,
+    "../../",
+    imagePath.replace(/^\/+/, "")
+  );
+
+  try {
+    if (fs.existsSync(oldPath)) {
+      fs.unlinkSync(oldPath);
+    }
+  } catch (error) {
+    console.error(
+      "Error deleting image:",
+      error
+    );
+  }
+};
+
+// ======================================================
+// CREATE GALLERY
+// ======================================================
 
 exports.createGallery = async (req, res) => {
   try {
@@ -17,7 +42,12 @@ exports.createGallery = async (req, res) => {
       featured,
       displayOrder,
       youtubeUrl,
+      facebookUrl,
     } = req.body;
+
+    // =========================
+    // Title Validation
+    // =========================
 
     if (!title?.trim()) {
       return res.status(400).json({
@@ -26,6 +56,25 @@ exports.createGallery = async (req, res) => {
       });
     }
 
+    // =========================
+    // Type Validation
+    // =========================
+
+    if (
+      !["image", "video", "facebook"].includes(
+        type
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid gallery type",
+      });
+    }
+
+    // =========================
+    // IMAGE VALIDATION
+    // =========================
+
     if (type === "image" && !req.file) {
       return res.status(400).json({
         success: false,
@@ -33,33 +82,67 @@ exports.createGallery = async (req, res) => {
       });
     }
 
-    if (type === "video" && !youtubeUrl?.trim()) {
+    // =========================
+    // YOUTUBE VALIDATION
+    // =========================
+
+    if (
+      type === "video" &&
+      !youtubeUrl?.trim()
+    ) {
       return res.status(400).json({
         success: false,
         message: "Please enter YouTube URL",
       });
     }
 
+    // =========================
+    // FACEBOOK VALIDATION
+    // =========================
+
+    if (
+      type === "facebook" &&
+      !facebookUrl?.trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter Facebook Video URL",
+      });
+    }
+
+    // =========================
+    // CREATE
+    // =========================
+
     const gallery = await Gallery.create({
       title: title.trim(),
 
       type,
 
+      // Image
       image:
-        type === "image"
+        type === "image" && req.file
           ? `/uploads/${req.file.filename}`
           : "",
 
+      // YouTube
       youtubeUrl:
         type === "video"
           ? youtubeUrl.trim()
+          : "",
+
+      // Facebook
+      facebookUrl:
+        type === "facebook"
+          ? facebookUrl.trim()
           : "",
 
       category,
 
       status,
 
-      description,
+      description:
+        description?.trim() || "",
 
       featured:
         featured === "true" ||
@@ -71,11 +154,15 @@ exports.createGallery = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Gallery created successfully",
+      message:
+        "Gallery created successfully",
       data: gallery,
     });
   } catch (error) {
-    console.error(error);
+    console.error(
+      "Create Gallery Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -84,9 +171,9 @@ exports.createGallery = async (req, res) => {
   }
 };
 
-// =======================
-// Get Gallery
-// =======================
+// ======================================================
+// GET ALL GALLERY
+// ======================================================
 
 exports.getGallery = async (req, res) => {
   try {
@@ -101,7 +188,10 @@ exports.getGallery = async (req, res) => {
       data: gallery,
     });
   } catch (error) {
-    console.error(error);
+    console.error(
+      "Get Gallery Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -109,13 +199,15 @@ exports.getGallery = async (req, res) => {
     });
   }
 };
-// =======================
-// Update Gallery
-// =======================
+
+// ======================================================
+// UPDATE GALLERY
+// ======================================================
 
 exports.updateGallery = async (req, res) => {
   try {
-    const gallery = await Gallery.findById(req.params.id);
+    const gallery =
+      await Gallery.findById(req.params.id);
 
     if (!gallery) {
       return res.status(404).json({
@@ -133,90 +225,159 @@ exports.updateGallery = async (req, res) => {
       featured,
       displayOrder,
       youtubeUrl,
+      facebookUrl,
     } = req.body;
 
+    // =========================
     // Basic Fields
-    gallery.title = title?.trim() || gallery.title;
-    gallery.type = type || gallery.type;
-    gallery.category = category || gallery.category;
-    gallery.status = status || gallery.status;
-    gallery.description = description || "";
+    // =========================
+
+    gallery.title =
+      title?.trim() || gallery.title;
+
+    gallery.type =
+      type || gallery.type;
+
+    gallery.category =
+      category || gallery.category;
+
+    gallery.status =
+      status || gallery.status;
+
+    gallery.description =
+      description?.trim() || "";
+
     gallery.featured =
-      featured === true || featured === "true";
+      featured === true ||
+      featured === "true";
+
     gallery.displayOrder =
       Number(displayOrder) || 0;
 
-    // ======================
+    // =========================
+    // TYPE VALIDATION
+    // =========================
+
+    if (
+      !["image", "video", "facebook"].includes(
+        gallery.type
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid gallery type",
+      });
+    }
+
+    // ==================================================
     // IMAGE
-    // ======================
+    // ==================================================
 
     if (gallery.type === "image") {
-      // Remove old youtube url
+      // Remove URLs
       gallery.youtubeUrl = "";
+      gallery.facebookUrl = "";
 
+      // New image uploaded
       if (req.file) {
         // Delete old image
         if (gallery.image) {
-          const oldPath = path.join(
-            __dirname,
-            "../../",
-            gallery.image.replace("/", "")
+          deleteImageFile(
+            gallery.image
           );
-
-          if (fs.existsSync(oldPath)) {
-            fs.unlinkSync(oldPath);
-          }
         }
 
-        gallery.image = `/uploads/${req.file.filename}`;
+        gallery.image =
+          `/uploads/${req.file.filename}`;
       }
 
+      // Existing image check
       if (!gallery.image) {
         return res.status(400).json({
           success: false,
-          message: "Please upload image",
+          message:
+            "Please upload an image",
         });
       }
     }
 
-    // ======================
-    // VIDEO
-    // ======================
+    // ==================================================
+    // YOUTUBE VIDEO
+    // ==================================================
 
     if (gallery.type === "video") {
       if (!youtubeUrl?.trim()) {
         return res.status(400).json({
           success: false,
-          message: "Please enter YouTube URL",
+          message:
+            "Please enter YouTube URL",
         });
       }
 
-      // Delete old image if exists
+      // Delete old image
       if (gallery.image) {
-        const oldPath = path.join(
-          __dirname,
-          "../../",
-          gallery.image.replace("/", "")
+        deleteImageFile(
+          gallery.image
         );
-
-        if (fs.existsSync(oldPath)) {
-          fs.unlinkSync(oldPath);
-        }
       }
 
       gallery.image = "";
-      gallery.youtubeUrl = youtubeUrl.trim();
+
+      // Clear Facebook
+      gallery.facebookUrl = "";
+
+      // Save YouTube
+      gallery.youtubeUrl =
+        youtubeUrl.trim();
     }
+
+    // ==================================================
+    // FACEBOOK VIDEO
+    // ==================================================
+
+    if (gallery.type === "facebook") {
+      if (!facebookUrl?.trim()) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Please enter Facebook Video URL",
+        });
+      }
+
+      // Delete old image
+      if (gallery.image) {
+        deleteImageFile(
+          gallery.image
+        );
+      }
+
+      gallery.image = "";
+
+      // Clear YouTube
+      gallery.youtubeUrl = "";
+
+      // Save Facebook URL
+      gallery.facebookUrl =
+        facebookUrl.trim();
+    }
+
+    // =========================
+    // SAVE
+    // =========================
 
     await gallery.save();
 
     return res.json({
       success: true,
-      message: "Gallery updated successfully",
+      message:
+        "Gallery updated successfully",
       data: gallery,
     });
   } catch (error) {
-    console.error(error);
+    console.error(
+      "Update Gallery Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
@@ -224,13 +385,15 @@ exports.updateGallery = async (req, res) => {
     });
   }
 };
-// =======================
-// Delete Gallery
-// =======================
+
+// ======================================================
+// DELETE GALLERY
+// ======================================================
 
 exports.deleteGallery = async (req, res) => {
   try {
-    const gallery = await Gallery.findById(req.params.id);
+    const gallery =
+      await Gallery.findById(req.params.id);
 
     if (!gallery) {
       return res.status(404).json({
@@ -239,31 +402,37 @@ exports.deleteGallery = async (req, res) => {
       });
     }
 
-    // Delete uploaded image only
+    // =========================
+    // Delete Image
+    // =========================
+
     if (
       gallery.type === "image" &&
       gallery.image
     ) {
-      const imagePath = path.join(
-        __dirname,
-        "../../",
-        gallery.image.replace("/", "")
+      deleteImageFile(
+        gallery.image
       );
-
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
     }
 
-    await Gallery.findByIdAndDelete(req.params.id);
+    // =========================
+    // Delete DB Record
+    // =========================
+
+    await Gallery.findByIdAndDelete(
+      req.params.id
+    );
 
     return res.status(200).json({
       success: true,
-      message: "Gallery deleted successfully",
+      message:
+        "Gallery deleted successfully",
     });
-
   } catch (error) {
-    console.error(error);
+    console.error(
+      "Delete Gallery Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,

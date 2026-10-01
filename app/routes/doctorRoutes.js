@@ -28,7 +28,7 @@ const upload = multer({
   },
 });
 
-router.post("/", upload.single("image"));
+router.post("/", upload.single("image"), createDoctor);
 
 router.get("/", getDoctors);
 
