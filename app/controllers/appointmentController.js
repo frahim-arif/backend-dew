@@ -11,7 +11,10 @@ const {
   sendCancelledEmail,
 } = require("../utils/sendEmail");
 
-// YYYY-MM-DD local date
+// ==================================================
+// FORMAT DATE
+// YYYY-MM-DD
+// ==================================================
 const formatDate = (date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -20,22 +23,26 @@ const formatDate = (date) => {
   return `${year}-${month}-${day}`;
 };
 
-// Minimum appointment date kal
-const getTomorrowDate = () => {
-  const tomorrow = new Date();
-
-  tomorrow.setHours(0, 0, 0, 0);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-
-  return formatDate(tomorrow);
+// ==================================================
+// GET TODAY DATE
+// India timezone ke according
+// ==================================================
+const getTodayDate = () => {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+  }).format(new Date());
 };
 
-// Department compare helper
+// ==================================================
+// DEPARTMENT COMPARE HELPER
+// ==================================================
 const normalizeText = (value = "") => {
   return String(value).trim().toLowerCase();
 };
 
+// ==================================================
 // CREATE APPOINTMENT
+// ==================================================
 exports.createAppointment = async (req, res) => {
   try {
     const {
@@ -46,12 +53,15 @@ exports.createAppointment = async (req, res) => {
       gender,
       department,
       date,
+      time,
       doctor,
       doctorId,
       message,
     } = req.body;
 
-    // Required fields
+    // ==================================================
+    // REQUIRED FIELDS
+    // ==================================================
     if (
       !name?.trim() ||
       !phone?.trim() ||
@@ -67,7 +77,9 @@ exports.createAppointment = async (req, res) => {
       });
     }
 
-    // Phone validation
+    // ==================================================
+    // PHONE VALIDATION
+    // ==================================================
     if (!/^[0-9]{10}$/.test(phone.trim())) {
       return res.status(400).json({
         success: false,
@@ -75,7 +87,9 @@ exports.createAppointment = async (req, res) => {
       });
     }
 
-    // Doctor ID validation
+    // ==================================================
+    // DOCTOR ID VALIDATION
+    // ==================================================
     if (!mongoose.Types.ObjectId.isValid(doctorId)) {
       return res.status(400).json({
         success: false,
@@ -83,18 +97,27 @@ exports.createAppointment = async (req, res) => {
       });
     }
 
-    // Appointment minimum kal se
-    const tomorrowDate = getTomorrowDate();
+    // ==================================================
+    // DATE VALIDATION
+    //
+    // Aaj allowed
+    // Kal allowed
+    // Future allowed
+    // Past date NOT allowed
+    // ==================================================
+    const todayDate = getTodayDate();
 
-    if (date < tomorrowDate) {
+    if (date < todayDate) {
       return res.status(400).json({
         success: false,
         message:
-          "Appointment kam se kam 1 din pehle book karna hoga. Kal ya uske baad ki date select karein.",
+          "Past date appointment allowed nahi hai. Aaj ya future date select karein.",
       });
     }
 
-    // MongoDB se doctor check
+    // ==================================================
+    // MONGODB SE DOCTOR CHECK
+    // ==================================================
     const selectedDoctor = await Doctor.findById(doctorId);
 
     if (!selectedDoctor) {
@@ -104,7 +127,9 @@ exports.createAppointment = async (req, res) => {
       });
     }
 
-    // Active doctor check
+    // ==================================================
+    // ACTIVE DOCTOR CHECK
+    // ==================================================
     if (selectedDoctor.status !== "Active") {
       return res.status(400).json({
         success: false,
@@ -112,17 +137,25 @@ exports.createAppointment = async (req, res) => {
       });
     }
 
-    // Doctor name check
-    if (normalizeText(selectedDoctor.name) !== normalizeText(doctor)) {
+    // ==================================================
+    // DOCTOR NAME CHECK
+    // ==================================================
+    if (
+      normalizeText(selectedDoctor.name) !==
+      normalizeText(doctor)
+    ) {
       return res.status(400).json({
         success: false,
         message: "Selected doctor information does not match",
       });
     }
 
-    // Department-wise doctor validation
+    // ==================================================
+    // DEPARTMENT-WISE DOCTOR VALIDATION
+    // ==================================================
     if (
-      normalizeText(selectedDoctor.department) !== normalizeText(department)
+      normalizeText(selectedDoctor.department) !==
+      normalizeText(department)
     ) {
       return res.status(400).json({
         success: false,
@@ -130,7 +163,9 @@ exports.createAppointment = async (req, res) => {
       });
     }
 
-    // Age validation
+    // ==================================================
+    // AGE VALIDATION
+    // ==================================================
     if (age) {
       const numericAge = Number(age);
 
@@ -146,54 +181,88 @@ exports.createAppointment = async (req, res) => {
       }
     }
 
+    // ==================================================
+    // CREATE APPOINTMENT
+    // ==================================================
     const appointment = await Appointment.create({
       name: name.trim(),
       phone: phone.trim(),
       email: email?.trim() || "",
       age: age ? String(age).trim() : "",
       gender: gender?.trim() || "",
+
       department: selectedDoctor.department,
+
       date,
+
+      // Time frontend se aa raha hai
+      time: time?.trim() || "",
+
       doctor: selectedDoctor.name,
+
       doctorId: selectedDoctor._id,
+
       message: message?.trim() || "",
+
       status: "Pending",
     });
 
-    // Hospital email
+    // ==================================================
+    // HOSPITAL EMAIL
+    // ==================================================
     try {
       await sendHospitalEmail(appointment);
+
       console.log("✅ Hospital email sent");
     } catch (error) {
-      console.log("❌ Hospital Email Error:", error.message);
+      console.log(
+        "❌ Hospital Email Error:",
+        error.message
+      );
     }
 
-    // Patient email sirf email ho tab
+    // ==================================================
+    // PATIENT EMAIL
+    // Sirf email available hone par
+    // ==================================================
     if (appointment.email) {
       try {
         await sendPatientEmail(appointment);
+
         console.log("✅ Patient email sent");
       } catch (error) {
-        console.log("❌ Patient Email Error:", error.message);
+        console.log(
+          "❌ Patient Email Error:",
+          error.message
+        );
       }
     }
 
+    // ==================================================
+    // SUCCESS RESPONSE
+    // ==================================================
     return res.status(201).json({
       success: true,
       message: "Appointment booked successfully",
       data: appointment,
     });
   } catch (error) {
-    console.error("Appointment Error:", error);
+    console.error(
+      "Appointment Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Server error while booking appointment",
+      message:
+        "Server error while booking appointment",
     });
   }
 };
 
+// ==================================================
 // GET ALL APPOINTMENTS
+// ==================================================
 exports.getAppointments = async (req, res) => {
   try {
     const appointments = await Appointment.find()
@@ -201,7 +270,9 @@ exports.getAppointments = async (req, res) => {
         "doctorId",
         "name specialist department qualification image status"
       )
-      .sort({ createdAt: -1 });
+      .sort({
+        createdAt: -1,
+      });
 
     return res.json({
       success: true,
@@ -209,17 +280,26 @@ exports.getAppointments = async (req, res) => {
       data: appointments,
     });
   } catch (error) {
-    console.error("Get Appointments Error:", error);
+    console.error(
+      "Get Appointments Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Server error while fetching appointments",
+      message:
+        "Server error while fetching appointments",
     });
   }
 };
 
+// ==================================================
 // UPDATE STATUS + SEND EMAIL
-exports.updateAppointmentStatus = async (req, res) => {
+// ==================================================
+exports.updateAppointmentStatus = async (
+  req,
+  res
+) => {
   try {
     const { status } = req.body;
 
@@ -230,6 +310,9 @@ exports.updateAppointmentStatus = async (req, res) => {
       "Completed",
     ];
 
+    // ==================================================
+    // STATUS VALIDATION
+    // ==================================================
     if (!allowedStatus.includes(status)) {
       return res.status(400).json({
         success: false,
@@ -237,7 +320,13 @@ exports.updateAppointmentStatus = async (req, res) => {
       });
     }
 
-    const appointment = await Appointment.findById(req.params.id);
+    // ==================================================
+    // FIND APPOINTMENT
+    // ==================================================
+    const appointment =
+      await Appointment.findById(
+        req.params.id
+      );
 
     if (!appointment) {
       return res.status(404).json({
@@ -246,50 +335,92 @@ exports.updateAppointmentStatus = async (req, res) => {
       });
     }
 
+    // ==================================================
+    // UPDATE STATUS
+    // ==================================================
     appointment.status = status;
+
     await appointment.save();
 
-    // Email sirf patient ka email ho tab
+    // ==================================================
+    // EMAIL SIRF PATIENT EMAIL HO TAB
+    // ==================================================
     if (appointment.email) {
       try {
+        // CONFIRMED
         if (status === "Confirmed") {
-          await sendConfirmationEmail(appointment);
-          console.log("✅ Confirmation email sent");
+          await sendConfirmationEmail(
+            appointment
+          );
+
+          console.log(
+            "✅ Confirmation email sent"
+          );
         }
 
+        // COMPLETED
         if (status === "Completed") {
-          await sendCompletedEmail(appointment);
-          console.log("✅ Completed email sent");
+          await sendCompletedEmail(
+            appointment
+          );
+
+          console.log(
+            "✅ Completed email sent"
+          );
         }
 
+        // CANCELLED
         if (status === "Cancelled") {
-          await sendCancelledEmail(appointment);
-          console.log("✅ Cancelled email sent");
+          await sendCancelledEmail(
+            appointment
+          );
+
+          console.log(
+            "✅ Cancelled email sent"
+          );
         }
       } catch (emailError) {
-        console.log("❌ Status Email Error:", emailError.message);
+        console.log(
+          "❌ Status Email Error:",
+          emailError.message
+        );
       }
     }
 
+    // ==================================================
+    // SUCCESS
+    // ==================================================
     return res.json({
       success: true,
       message: `Appointment ${status.toLowerCase()} successfully`,
       data: appointment,
     });
   } catch (error) {
-    console.error("Update Status Error:", error);
+    console.error(
+      "Update Status Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Server error while updating status",
+      message:
+        "Server error while updating appointment",
     });
   }
 };
 
+// ==================================================
 // DELETE APPOINTMENT
-exports.deleteAppointment = async (req, res) => {
+// ==================================================
+exports.deleteAppointment = async (
+  req,
+  res
+) => {
   try {
-    const appointment = await Appointment.findByIdAndDelete(req.params.id);
+    const appointment =
+      await Appointment.findByIdAndDelete(
+        req.params.id
+      );
 
     if (!appointment) {
       return res.status(404).json({
@@ -300,14 +431,19 @@ exports.deleteAppointment = async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Appointment deleted successfully",
+      message:
+        "Appointment deleted successfully",
     });
   } catch (error) {
-    console.error("Delete Appointment Error:", error);
+    console.error(
+      "Delete Appointment Error:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Server error while deleting appointment",
+      message:
+        "Server error while deleting appointment",
     });
   }
 };
