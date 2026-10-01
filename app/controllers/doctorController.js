@@ -1,5 +1,8 @@
 const Doctor = require("../models/Doctor");
 
+// ==================================================
+// PARSE OPD DAYS
+// ==================================================
 const parseOpdDays = (opdDays) => {
   if (!opdDays) return [];
 
@@ -8,7 +11,13 @@ const parseOpdDays = (opdDays) => {
   }
 
   try {
-    return JSON.parse(opdDays);
+    const parsed = JSON.parse(opdDays);
+
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+
+    return [];
   } catch {
     return String(opdDays)
       .split(",")
@@ -17,68 +26,158 @@ const parseOpdDays = (opdDays) => {
   }
 };
 
+// ==================================================
+// PARSE BOOLEAN
+// ==================================================
+const parseBoolean = (value, defaultValue = false) => {
+  if (
+    value === true ||
+    value === "true" ||
+    value === "1" ||
+    value === 1
+  ) {
+    return true;
+  }
+
+  if (
+    value === false ||
+    value === "false" ||
+    value === "0" ||
+    value === 0
+  ) {
+    return false;
+  }
+
+  return defaultValue;
+};
+
+// ==================================================
+// CREATE DOCTOR
+// ==================================================
 exports.createDoctor = async (req, res) => {
   try {
     const doctor = await Doctor.create({
+      // ----------------------------------------------
+      // BASIC
+      // ----------------------------------------------
       name: req.body.name,
       specialist: req.body.specialist,
-      qualification: req.body.qualification,
-      experience: req.body.experience,
-      department: req.body.department,
+      qualification: req.body.qualification || "",
+      experience: req.body.experience || "",
+      department: req.body.department || "",
 
-      opdStartTime: req.body.opdStartTime,
-      opdEndTime: req.body.opdEndTime,
-      opdDays: parseOpdDays(req.body.opdDays),
+      // ----------------------------------------------
+      // AVAILABILITY
+      // ----------------------------------------------
+      opdAvailable: parseBoolean(
+        req.body.opdAvailable,
+        true
+      ),
 
-      slotDuration: Number(req.body.slotDuration || 15),
-      maxPatientsPerDay: Number(req.body.maxPatientsPerDay || 30),
+      indoorDoctor: parseBoolean(
+        req.body.indoorDoctor,
+        false
+      ),
 
-      status: req.body.status || "Active",
+      // ----------------------------------------------
+      // FEES
+      // ----------------------------------------------
+      opdFee: Number(req.body.opdFee || 0),
 
-      // Cloudinary URL
-      image: req.file ? req.file.path : "",
+      indoorFee: Number(
+        req.body.indoorFee || 0
+      ),
+
+      // ----------------------------------------------
+      // OPD SCHEDULE
+      // ----------------------------------------------
+      opdStartTime:
+        req.body.opdStartTime || "",
+
+      opdEndTime:
+        req.body.opdEndTime || "",
+
+      opdDays: parseOpdDays(
+        req.body.opdDays
+      ),
+
+      slotDuration: Number(
+        req.body.slotDuration || 15
+      ),
+
+      maxPatientsPerDay: Number(
+        req.body.maxPatientsPerDay || 30
+      ),
+
+      // ----------------------------------------------
+      // STATUS
+      // ----------------------------------------------
+      status:
+        req.body.status || "Active",
+
+      // ----------------------------------------------
+      // CLOUDINARY IMAGE
+      // ----------------------------------------------
+      image: req.file
+        ? req.file.path
+        : "",
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Doctor added successfully",
       data: doctor,
     });
   } catch (error) {
-    console.error("CREATE DOCTOR ERROR:", error);
+    console.error(
+      "CREATE DOCTOR ERROR:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Server error while adding doctor",
+      message:
+        "Server error while adding doctor",
       error: error.message,
     });
   }
 };
 
+// ==================================================
+// GET ALL DOCTORS
+// ==================================================
 exports.getDoctors = async (req, res) => {
   try {
     const doctors = await Doctor.find().sort({
       createdAt: -1,
     });
 
-    res.json({
+    return res.json({
       success: true,
       count: doctors.length,
       data: doctors,
     });
   } catch (error) {
-    console.error("GET DOCTORS ERROR:", error);
+    console.error(
+      "GET DOCTORS ERROR:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Server error while fetching doctors",
+      message:
+        "Server error while fetching doctors",
     });
   }
 };
 
-exports.updateDoctor = async (req, res) => {
+// ==================================================
+// GET SINGLE DOCTOR
+// ==================================================
+exports.getDoctorById = async (req, res) => {
   try {
-    const doctor = await Doctor.findById(req.params.id);
+    const doctor =
+      await Doctor.findById(req.params.id);
 
     if (!doctor) {
       return res.status(404).json({
@@ -87,49 +186,193 @@ exports.updateDoctor = async (req, res) => {
       });
     }
 
-    doctor.name = req.body.name;
-    doctor.specialist = req.body.specialist;
-    doctor.qualification = req.body.qualification;
-    doctor.experience = req.body.experience;
-    doctor.department = req.body.department;
-
-    doctor.opdStartTime = req.body.opdStartTime;
-    doctor.opdEndTime = req.body.opdEndTime;
-    doctor.opdDays = parseOpdDays(req.body.opdDays);
-
-    doctor.slotDuration = Number(req.body.slotDuration || 15);
-    doctor.maxPatientsPerDay = Number(
-      req.body.maxPatientsPerDay || 30
+    return res.json({
+      success: true,
+      data: doctor,
+    });
+  } catch (error) {
+    console.error(
+      "GET DOCTOR ERROR:",
+      error
     );
 
-    doctor.status = req.body.status || "Active";
+    return res.status(500).json({
+      success: false,
+      message:
+        "Server error while fetching doctor",
+    });
+  }
+};
 
-    // New image uploaded
+// ==================================================
+// UPDATE DOCTOR
+// ==================================================
+exports.updateDoctor = async (req, res) => {
+  try {
+    const doctor =
+      await Doctor.findById(req.params.id);
+
+    if (!doctor) {
+      return res.status(404).json({
+        success: false,
+        message: "Doctor not found",
+      });
+    }
+
+    // ----------------------------------------------
+    // BASIC
+    // ----------------------------------------------
+    doctor.name =
+      req.body.name ?? doctor.name;
+
+    doctor.specialist =
+      req.body.specialist ??
+      doctor.specialist;
+
+    doctor.qualification =
+      req.body.qualification ??
+      doctor.qualification;
+
+    doctor.experience =
+      req.body.experience ??
+      doctor.experience;
+
+    doctor.department =
+      req.body.department ??
+      doctor.department;
+
+    // ----------------------------------------------
+    // AVAILABILITY
+    // ----------------------------------------------
+    if (
+      req.body.opdAvailable !== undefined
+    ) {
+      doctor.opdAvailable =
+        parseBoolean(
+          req.body.opdAvailable,
+          doctor.opdAvailable
+        );
+    }
+
+    if (
+      req.body.indoorDoctor !== undefined
+    ) {
+      doctor.indoorDoctor =
+        parseBoolean(
+          req.body.indoorDoctor,
+          doctor.indoorDoctor
+        );
+    }
+
+    // ----------------------------------------------
+    // FEES
+    // ----------------------------------------------
+    if (req.body.opdFee !== undefined) {
+      doctor.opdFee = Number(
+        req.body.opdFee
+      );
+    }
+
+    if (
+      req.body.indoorFee !== undefined
+    ) {
+      doctor.indoorFee = Number(
+        req.body.indoorFee
+      );
+    }
+
+    // ----------------------------------------------
+    // OPD SCHEDULE
+    // ----------------------------------------------
+    if (
+      req.body.opdStartTime !== undefined
+    ) {
+      doctor.opdStartTime =
+        req.body.opdStartTime;
+    }
+
+    if (
+      req.body.opdEndTime !== undefined
+    ) {
+      doctor.opdEndTime =
+        req.body.opdEndTime;
+    }
+
+    if (
+      req.body.opdDays !== undefined
+    ) {
+      doctor.opdDays =
+        parseOpdDays(
+          req.body.opdDays
+        );
+    }
+
+    // ----------------------------------------------
+    // SLOT SETTINGS
+    // ----------------------------------------------
+    if (
+      req.body.slotDuration !== undefined
+    ) {
+      doctor.slotDuration =
+        Number(req.body.slotDuration);
+    }
+
+    if (
+      req.body.maxPatientsPerDay !==
+      undefined
+    ) {
+      doctor.maxPatientsPerDay =
+        Number(
+          req.body.maxPatientsPerDay
+        );
+    }
+
+    // ----------------------------------------------
+    // STATUS
+    // ----------------------------------------------
+    if (req.body.status !== undefined) {
+      doctor.status =
+        req.body.status;
+    }
+
+    // ----------------------------------------------
+    // NEW CLOUDINARY IMAGE
+    // ----------------------------------------------
     if (req.file) {
-      doctor.image = req.file.path;
+      doctor.image =
+        req.file.path;
     }
 
     await doctor.save();
 
-    res.json({
+    return res.json({
       success: true,
-      message: "Doctor updated successfully",
+      message:
+        "Doctor updated successfully",
       data: doctor,
     });
   } catch (error) {
-    console.error("UPDATE DOCTOR ERROR:", error);
+    console.error(
+      "UPDATE DOCTOR ERROR:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Server error while updating doctor",
+      message:
+        "Server error while updating doctor",
       error: error.message,
     });
   }
 };
 
+// ==================================================
+// DELETE DOCTOR
+// ==================================================
 exports.deleteDoctor = async (req, res) => {
   try {
-    const doctor = await Doctor.findById(req.params.id);
+    const doctor =
+      await Doctor.findById(req.params.id);
 
     if (!doctor) {
       return res.status(404).json({
@@ -140,17 +383,21 @@ exports.deleteDoctor = async (req, res) => {
 
     await doctor.deleteOne();
 
-    res.json({
+    return res.json({
       success: true,
-      message: "Doctor deleted successfully",
+      message:
+        "Doctor deleted successfully",
     });
   } catch (error) {
-    console.error("DELETE DOCTOR ERROR:", error);
+    console.error(
+      "DELETE DOCTOR ERROR:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Server error while deleting doctor",
-      error: error.message,
+      message:
+        "Server error while deleting doctor",
     });
   }
 };
