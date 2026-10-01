@@ -176,8 +176,29 @@ exports.getDoctors = async (req, res) => {
 // ==================================================
 exports.getDoctorById = async (req, res) => {
   try {
-    const doctor =
-      await Doctor.findById(req.params.id);
+    const { id } = req.params;
+
+    // ----------------------------------------------
+    // VALIDATE MONGODB OBJECT ID
+    // ----------------------------------------------
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "Doctor ID is required",
+      });
+    }
+
+    if (!/^[0-9a-fA-F]{24}$/.test(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid doctor ID",
+      });
+    }
+
+    // ----------------------------------------------
+    // FIND DOCTOR
+    // ----------------------------------------------
+    const doctor = await Doctor.findById(id);
 
     if (!doctor) {
       return res.status(404).json({
@@ -192,7 +213,7 @@ exports.getDoctorById = async (req, res) => {
     });
   } catch (error) {
     console.error(
-      "GET DOCTOR ERROR:",
+      "GET DOCTOR BY ID ERROR:",
       error
     );
 
@@ -200,6 +221,7 @@ exports.getDoctorById = async (req, res) => {
       success: false,
       message:
         "Server error while fetching doctor",
+      error: error.message,
     });
   }
 };
