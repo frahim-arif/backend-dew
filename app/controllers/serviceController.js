@@ -1,5 +1,9 @@
+
 const Service = require("../models/Service");
 
+// ==================================================
+// CREATE SERVICE
+// ==================================================
 exports.createService = async (req, res) => {
   try {
     const service = await Service.create({
@@ -28,6 +32,9 @@ exports.createService = async (req, res) => {
   }
 };
 
+// ==================================================
+// GET ALL SERVICES
+// ==================================================
 exports.getServices = async (req, res) => {
   try {
     const services = await Service.find().sort({
@@ -45,10 +52,51 @@ exports.getServices = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Server error while fetching services",
+      error: error.message,
     });
   }
 };
 
+// ==================================================
+// GET SINGLE SERVICE BY ID
+// ==================================================
+exports.getServiceById = async (req, res) => {
+  try {
+    const service = await Service.findById(req.params.id);
+
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: service,
+    });
+  } catch (error) {
+    console.error("GET SERVICE BY ID ERROR:", error);
+
+    // Invalid MongoDB ObjectId
+    if (error.name === "CastError") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid service ID",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Server error while fetching service",
+      error: error.message,
+    });
+  }
+};
+
+// ==================================================
+// UPDATE SERVICE
+// ==================================================
 exports.updateService = async (req, res) => {
   try {
     const service = await Service.findById(req.params.id);
@@ -88,6 +136,9 @@ exports.updateService = async (req, res) => {
   }
 };
 
+// ==================================================
+// DELETE SERVICE
+// ==================================================
 exports.deleteService = async (req, res) => {
   try {
     const service = await Service.findById(req.params.id);
@@ -111,6 +162,8 @@ exports.deleteService = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Server error while deleting service",
+      error: error.message,
     });
   }
 };
+
