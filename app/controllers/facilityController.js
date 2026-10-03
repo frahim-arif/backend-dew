@@ -1,5 +1,8 @@
 const Facility = require("../models/Facility");
 
+// ==================================================
+// CREATE FACILITY
+// ==================================================
 exports.createFacility = async (req, res) => {
   try {
     const facility = await Facility.create({
@@ -29,6 +32,9 @@ exports.createFacility = async (req, res) => {
   }
 };
 
+// ==================================================
+// GET ALL FACILITIES
+// ==================================================
 exports.getFacilities = async (req, res) => {
   try {
     const facilities = await Facility.find().sort({
@@ -49,7 +55,6 @@ exports.getFacilities = async (req, res) => {
     });
   }
 };
-
 
 // ==================================================
 // GET SINGLE FACILITY
@@ -79,6 +84,10 @@ exports.getFacilityById = async (req, res) => {
     });
   }
 };
+
+// ==================================================
+// UPDATE FACILITY
+// ==================================================
 exports.updateFacility = async (req, res) => {
   try {
     const facility = await Facility.findById(req.params.id);
@@ -119,6 +128,9 @@ exports.updateFacility = async (req, res) => {
   }
 };
 
+// ==================================================
+// DELETE FACILITY
+// ==================================================
 exports.deleteFacility = async (req, res) => {
   try {
     const facility = await Facility.findById(req.params.id);
@@ -142,7 +154,6 @@ exports.deleteFacility = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Server error while deleting facility",
-      error: error.message,
     });
   }
 };
