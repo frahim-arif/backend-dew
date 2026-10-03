@@ -50,6 +50,35 @@ exports.getFacilities = async (req, res) => {
   }
 };
 
+
+// ==================================================
+// GET SINGLE FACILITY
+// ==================================================
+exports.getFacilityById = async (req, res) => {
+  try {
+    const facility = await Facility.findById(req.params.id);
+
+    if (!facility) {
+      return res.status(404).json({
+        success: false,
+        message: "Facility not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: facility,
+    });
+  } catch (error) {
+    console.error("GET FACILITY BY ID ERROR:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error while fetching facility",
+      error: error.message,
+    });
+  }
+};
 exports.updateFacility = async (req, res) => {
   try {
     const facility = await Facility.findById(req.params.id);
