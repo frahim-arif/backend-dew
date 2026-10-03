@@ -161,6 +161,7 @@ const serviceRoutes = require("./app/routes/serviceRoutes");
 const trainingCourseRoutes = require("./app/routes/trainingCourseRoutes");
 const trainingApplicationRoutes = require("./app/routes/trainingApplicationRoutes");
 const paymentRoutes = require("./app/routes/paymentRoutes");
+const reportsRoutes = require("./app/routes/reportsRoutes");
 
 // Create Express app
 const app = express();
@@ -212,6 +213,9 @@ app.use("/api/appointments", appointmentRoutes);
 
 // Payments
 app.use("/api/payments", paymentRoutes);
+
+// Doctor Reports
+app.use("/api/reports", reportsRoutes);
 
 // Doctors
 app.use("/api/doctors", doctorRoutes);
