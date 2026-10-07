@@ -1,6 +1,8 @@
+
 const express = require("express");
 const multer = require("multer");
 const path = require("path");
+const fs = require("fs");
 
 const {
   uploadReport,
@@ -11,57 +13,159 @@ const {
 
 const router = express.Router();
 
+/*
+|--------------------------------------------------------------------------
+| Upload Directory
+|--------------------------------------------------------------------------
+| Make sure uploads folder exists before multer tries to save a file.
+|--------------------------------------------------------------------------
+*/
+
+const uploadDir = path.join(process.cwd(), "uploads");
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, {
+    recursive: true,
+  });
+}
+
+/*
+|--------------------------------------------------------------------------
+| Multer Storage
+|--------------------------------------------------------------------------
+*/
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/");
+    cb(null, uploadDir);
   },
 
   filename: (req, file, cb) => {
-    const uniqueName =
-      "report-" + Date.now() + "-" + Math.round(Math.random() * 1e9);
+    const extension = path.extname(file.originalname);
 
-    cb(null, uniqueName + path.extname(file.originalname));
+    const uniqueName =
+      "report-" +
+      Date.now() +
+      "-" +
+      Math.round(Math.random() * 1e9) +
+      extension;
+
+    cb(null, uniqueName);
   },
 });
 
+/*
+|--------------------------------------------------------------------------
+| Allowed File Types
+|--------------------------------------------------------------------------
+*/
+
 const fileFilter = (req, file, cb) => {
-  const allowed = [
+  const allowedMimeTypes = [
     "application/pdf",
     "image/jpeg",
     "image/jpg",
     "image/png",
   ];
 
-  if (allowed.includes(file.mimetype)) {
+  if (allowedMimeTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error("Only PDF, JPG and PNG files are allowed"));
+    cb(
+      new Error(
+        "Only PDF, JPG, JPEG and PNG files are allowed"
+      )
+    );
   }
 };
+
+/*
+|--------------------------------------------------------------------------
+| Multer Upload Configuration
+|--------------------------------------------------------------------------
+*/
 
 const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024,
+    fileSize: 10 * 1024 * 1024, // 10 MB
   },
 });
 
+/*
+|--------------------------------------------------------------------------
+| Upload Report
+|--------------------------------------------------------------------------
+*/
 
-// Upload Report
-router.post("/", upload.single("file"), uploadReport);
+router.post(
+  "/",
+  (req, res, next) => {
+    upload.single("file")(req, res, (err) => {
+      if (err instanceof multer.MulterError) {
+        console.error("Report Multer Error:", err);
 
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            success: false,
+            message: "Report file must be 10 MB or less.",
+          });
+        }
 
-// Get all reports - Admin
+        return res.status(400).json({
+          success: false,
+          message: err.message || "File upload error.",
+        });
+      }
+
+      if (err) {
+        console.error("Report File Upload Error:", err);
+
+        return res.status(400).json({
+          success: false,
+          message:
+            err.message ||
+            "Unable to upload report file.",
+        });
+      }
+
+      next();
+    });
+  },
+  uploadReport
+);
+
+/*
+|--------------------------------------------------------------------------
+| Get All Reports - Admin
+|--------------------------------------------------------------------------
+*/
+
 router.get("/", getAllReports);
 
+/*
+|--------------------------------------------------------------------------
+| Search Reports
+| IP/OP No + Mobile
+|--------------------------------------------------------------------------
+*/
 
-// Search using IP/OP No + Mobile
-router.get("/search", getReportsByIpOpAndPhone);
+router.get(
+  "/search",
+  getReportsByIpOpAndPhone
+);
 
+/*
+|--------------------------------------------------------------------------
+| Get Reports By Appointment
+|--------------------------------------------------------------------------
+*/
 
-// Get reports by appointment
-router.get("/appointment/:appointmentId", getReportsByAppointment);
-
+router.get(
+  "/appointment/:appointmentId",
+  getReportsByAppointment
+);
 
 module.exports = router;
+
