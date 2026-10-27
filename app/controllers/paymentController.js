@@ -1,196 +1,172 @@
+
 const crypto = require("crypto");
 const mongoose = require("mongoose");
-
-const razorpay = require("../../config/razorpay");
+const Razorpay = require("razorpay");
 const Appointment = require("../models/Appointment");
 
-const APPOINTMENT_FEE = Number(
-  process.env.APPOINTMENT_FEE || 500
-);
+const APPOINTMENT_FEE = Number(process.env.APPOINTMENT_FEE || 500);
 
-/* =========================================================
-   CREATE APPOINTMENT + RAZORPAY ORDER
-   POST /api/payments/create-order
-========================================================= */
+const sendResponse = (res, statusCode, status, message, data = null) => {
+  return res.status(statusCode).json({
+    _status: status,
+    _message: message,
+    _data: data,
+  });
+};
 
+const getRazorpay = () => {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+  if (!keyId || !keySecret) {
+    throw new Error("Razorpay environment variables are missing.");
+  }
+
+  return {
+    client: new Razorpay({
+      key_id: keyId,
+      key_secret: keySecret,
+    }),
+    keyId,
+    keySecret,
+  };
+};
+
+// ========================================
+// CREATE APPOINTMENT PAYMENT ORDER
+// ========================================
 exports.createAppointmentOrder = async (req, res) => {
-  let appointment = null;
-
   try {
-    const {
-      name,
-      phone,
-      email,
-      age,
-      gender,
-      department,
-      date,
-      doctor,
-      doctorId,
-      message,
-    } = req.body;
+    const { appointmentId } = req.body;
 
-    if (!name?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Patient name is required.",
-      });
+    if (!appointmentId) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Appointment ID is required."
+      );
     }
 
-    if (!phone?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Phone number is required.",
-      });
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Invalid appointment ID."
+      );
     }
 
-    if (!department?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Department is required.",
-      });
+    if (!Number.isFinite(APPOINTMENT_FEE) || APPOINTMENT_FEE <= 0) {
+      return sendResponse(
+        res,
+        500,
+        false,
+        "Appointment fee is not configured correctly."
+      );
     }
 
-    if (!date?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Appointment date is required.",
-      });
-    }
+    // Use the appointment already created by the appointments API.
+    const appointment = await Appointment.findById(appointmentId);
 
-    if (!doctor?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Doctor name is required.",
-      });
-    }
-
-    if (!doctorId) {
-      return res.status(400).json({
-        success: false,
-        message: "Doctor ID is required.",
-      });
-    }
-
-    if (!mongoose.isValidObjectId(doctorId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid doctor ID.",
-      });
+    if (!appointment) {
+      return sendResponse(
+        res,
+        404,
+        false,
+        "Appointment not found."
+      );
     }
 
     if (
-      !Number.isFinite(APPOINTMENT_FEE) ||
-      APPOINTMENT_FEE <= 0
+      !appointment.name ||
+      !appointment.phone ||
+      !appointment.department ||
+      !appointment.date ||
+      !appointment.doctor ||
+      !appointment.doctorId
     ) {
-      return res.status(500).json({
-        success: false,
-        message:
-          "Appointment fee is not configured correctly.",
-      });
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Appointment details are incomplete. Please submit the appointment again."
+      );
     }
 
-    const amountInPaise = Math.round(
-      APPOINTMENT_FEE * 100
-    );
+    if (appointment.paymentStatus === "Paid") {
+      return sendResponse(
+        res,
+        409,
+        false,
+        "Payment for this appointment is already completed."
+      );
+    }
 
-    appointment = await Appointment.create({
-      name: name.trim(),
-      phone: phone.trim(),
-      email: email?.trim() || "",
-      age: age ? String(age).trim() : "",
-      gender: gender?.trim() || "",
-      department: department.trim(),
-      date: date.trim(),
-      doctor: doctor.trim(),
-      doctorId,
-      message: message?.trim() || "",
+    const { client, keyId } = getRazorpay();
 
-      status: "Pending Payment",
-      paymentStatus: "Pending",
-      paymentAmount: APPOINTMENT_FEE,
-    });
+    // Razorpay amount must be in paise.
+    const amountInPaise = Math.round(APPOINTMENT_FEE * 100);
 
-    const receipt = `apt_${appointment._id
-      .toString()
-      .slice(-18)}`;
-
-    const razorpayOrder = await razorpay.orders.create({
+    const order = await client.orders.create({
       amount: amountInPaise,
       currency: "INR",
-      receipt,
-
+      receipt: `apt_${appointment._id.toString()}`.slice(0, 40),
       notes: {
         appointmentId: appointment._id.toString(),
-        doctorId: appointment.doctorId.toString(),
-        patientName: appointment.name,
-        patientPhone: appointment.phone,
-        doctor: appointment.doctor,
-        appointmentDate: appointment.date,
+        patientName: String(appointment.name),
+        department: String(appointment.department),
       },
     });
 
-    appointment.razorpayOrderId = razorpayOrder.id;
+    // Update the existing appointment; do not create another one.
+    appointment.razorpayOrderId = order.id;
+    appointment.paymentAmount = APPOINTMENT_FEE;
+    appointment.paymentStatus = "Pending";
+    appointment.status = "Pending Payment";
+
     await appointment.save();
 
-    return res.status(201).json({
-      success: true,
-      message: "Payment order created successfully.",
-
-      data: {
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Payment order created successfully.",
+      {
         appointmentId: appointment._id,
-        orderId: razorpayOrder.id,
-        keyId: process.env.RAZORPAY_KEY_ID,
-
-        amount: razorpayOrder.amount,
+        orderId: order.id,
+        keyId,
+        amount: order.amount,
         amountInRupees: APPOINTMENT_FEE,
-        currency: razorpayOrder.currency,
-
+        currency: order.currency,
         patient: {
           name: appointment.name,
           phone: appointment.phone,
-          email: appointment.email,
+          email: appointment.email || "",
         },
-
         doctor: appointment.doctor,
         doctorId: appointment.doctorId,
+        department: appointment.department,
         appointmentDate: appointment.date,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Create Razorpay appointment order error:",
-      error
+        appointmentTime: appointment.time,
+      }
     );
+  } catch (error) {
+    console.error("Create appointment order error:", error);
 
-    if (
-      appointment?._id &&
-      !appointment.razorpayOrderId
-    ) {
-      await Appointment.findByIdAndDelete(
-        appointment._id
-      ).catch(() => {});
-    }
-
-    return res.status(500).json({
-      success: false,
-      message:
-        error?.error?.description ||
-        error?.message ||
-        "Unable to create payment order.",
-    });
+    return sendResponse(
+      res,
+      500,
+      false,
+      "Unable to create payment order. Please try again."
+    );
   }
 };
 
-/* =========================================================
-   VERIFY RAZORPAY PAYMENT
-   POST /api/payments/verify
-========================================================= */
-
-exports.verifyAppointmentPayment = async (
-  req,
-  res
-) => {
+// ========================================
+// VERIFY APPOINTMENT PAYMENT
+// ========================================
+exports.verifyAppointmentPayment = async (req, res) => {
   try {
     const {
       appointmentId,
@@ -205,265 +181,253 @@ exports.verifyAppointmentPayment = async (
       !razorpay_payment_id ||
       !razorpay_signature
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Payment verification data is incomplete.",
-      });
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Required payment verification details are missing."
+      );
     }
 
-    if (!mongoose.isValidObjectId(appointmentId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid appointment ID.",
-      });
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Invalid appointment ID."
+      );
     }
 
-    const appointment =
-      await Appointment.findById(appointmentId);
+    const { client, keySecret } = getRazorpay();
+
+    const appointment = await Appointment.findById(appointmentId);
 
     if (!appointment) {
-      return res.status(404).json({
-        success: false,
-        message: "Appointment not found.",
-      });
+      return sendResponse(
+        res,
+        404,
+        false,
+        "Appointment not found."
+      );
     }
 
+    // The order must belong to this appointment.
+    if (appointment.razorpayOrderId !== razorpay_order_id) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Payment order does not match this appointment."
+      );
+    }
+
+    // Idempotency: do not process an already verified payment again.
     if (
       appointment.paymentStatus === "Paid" &&
-      appointment.razorpayPaymentId ===
-        razorpay_payment_id
+      appointment.razorpayPaymentId === razorpay_payment_id
     ) {
-      return res.status(200).json({
-        success: true,
-        message: "Payment already verified.",
-
-        data: {
+      return sendResponse(
+        res,
+        200,
+        true,
+        "Payment has already been verified.",
+        {
           appointmentId: appointment._id,
+          paymentId: appointment.razorpayPaymentId,
+          paymentStatus: appointment.paymentStatus,
           status: appointment.status,
-          paymentStatus:
-            appointment.paymentStatus,
-          paymentId:
-            appointment.razorpayPaymentId,
-          orderId: appointment.razorpayOrderId,
-        },
-      });
+        }
+      );
     }
 
-    if (
-      appointment.razorpayOrderId !==
-      razorpay_order_id
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Razorpay order ID does not match.",
-      });
+    if (appointment.paymentStatus === "Paid") {
+      return sendResponse(
+        res,
+        409,
+        false,
+        "This appointment has already been paid using another payment."
+      );
     }
 
-    const signatureBody =
-      `${appointment.razorpayOrderId}|${razorpay_payment_id}`;
-
+    // Verify Razorpay signature using the server-side secret.
     const expectedSignature = crypto
-      .createHmac(
-        "sha256",
-        process.env.RAZORPAY_KEY_SECRET.trim()
-      )
-      .update(signatureBody)
+      .createHmac("sha256", keySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
-    const expectedBuffer = Buffer.from(
-      expectedSignature,
-      "utf8"
-    );
-
-    const receivedBuffer = Buffer.from(
-      razorpay_signature,
-      "utf8"
-    );
-
-    const isValidSignature =
-      expectedBuffer.length ===
-        receivedBuffer.length &&
-      crypto.timingSafeEqual(
-        expectedBuffer,
-        receivedBuffer
-      );
-
-    if (!isValidSignature) {
-      appointment.paymentStatus = "Failed";
-      await appointment.save();
-
-      return res.status(400).json({
-        success: false,
-        message:
-          "Payment signature verification failed.",
-      });
-    }
-
-    const payment = await razorpay.payments.fetch(
-      razorpay_payment_id
-    );
+    const received = Buffer.from(razorpay_signature, "hex");
+    const expected = Buffer.from(expectedSignature, "hex");
 
     if (
-      payment.order_id !==
-      appointment.razorpayOrderId
+      received.length !== expected.length ||
+      !crypto.timingSafeEqual(received, expected)
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Payment order verification failed.",
-      });
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Invalid payment signature."
+      );
+    }
+
+    // Verify payment details directly with Razorpay.
+    const payment = await client.payments.fetch(razorpay_payment_id);
+
+    if (payment.order_id !== razorpay_order_id) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Payment order verification failed."
+      );
+    }
+
+    if (payment.status !== "captured") {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Payment has not been captured yet."
+      );
     }
 
     const expectedAmount = Math.round(
-      Number(appointment.paymentAmount) * 100
+      Number(appointment.paymentAmount || APPOINTMENT_FEE) * 100
     );
 
-    if (Number(payment.amount) !== expectedAmount) {
-      return res.status(400).json({
-        success: false,
-        message: "Payment amount does not match.",
-      });
+    if (
+      payment.amount !== expectedAmount ||
+      payment.currency !== "INR"
+    ) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Payment amount or currency does not match."
+      );
     }
 
-    if (payment.currency !== "INR") {
-      return res.status(400).json({
-        success: false,
-        message: "Payment currency does not match.",
-      });
-    }
-
-    appointment.razorpayPaymentId =
-      razorpay_payment_id;
-
-    appointment.razorpaySignature =
-      razorpay_signature;
-
+    // Mark appointment paid only after all checks pass.
     appointment.paymentStatus = "Paid";
     appointment.status = "Confirmed";
+    appointment.razorpayPaymentId = razorpay_payment_id;
     appointment.paidAt = new Date();
 
     await appointment.save();
 
-    return res.status(200).json({
-      success: true,
-      message:
-        "Payment verified and appointment confirmed.",
-
-      data: {
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Payment verified successfully. Appointment confirmed.",
+      {
         appointmentId: appointment._id,
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        amount: payment.amount,
+        currency: payment.currency,
+        paymentStatus: appointment.paymentStatus,
         status: appointment.status,
-        paymentStatus:
-          appointment.paymentStatus,
-        paymentId:
-          appointment.razorpayPaymentId,
-        orderId: appointment.razorpayOrderId,
-        amount: appointment.paymentAmount,
-        paidAt: appointment.paidAt,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Verify Razorpay payment error:",
-      error
+      }
     );
+  } catch (error) {
+    console.error("Verify appointment payment error:", error);
 
-    return res.status(500).json({
-      success: false,
-      message:
-        error?.error?.description ||
-        error?.message ||
-        "Payment verification failed.",
-    });
+    return sendResponse(
+      res,
+      500,
+      false,
+      "Unable to verify payment. Please contact the hospital if money was deducted."
+    );
   }
 };
 
-/* =========================================================
-   MARK PAYMENT FAILED
-   POST /api/payments/failed
-========================================================= */
-
-exports.markAppointmentPaymentFailed = async (
-  req,
-  res
-) => {
+// ========================================
+// MARK APPOINTMENT PAYMENT FAILED
+// ========================================
+exports.markAppointmentPaymentFailed = async (req, res) => {
   try {
-    const {
-      appointmentId,
-      razorpayOrderId,
-      errorCode,
-      errorDescription,
-    } = req.body;
+    const { appointmentId, razorpay_order_id, reason } = req.body;
 
-    if (
-      !appointmentId ||
-      !mongoose.isValidObjectId(appointmentId)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Valid appointment ID is required.",
-      });
+    if (!appointmentId) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Appointment ID is required."
+      );
     }
 
-    const appointment =
-      await Appointment.findById(appointmentId);
+    if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Invalid appointment ID."
+      );
+    }
+
+    const appointment = await Appointment.findById(appointmentId);
 
     if (!appointment) {
-      return res.status(404).json({
-        success: false,
-        message: "Appointment not found.",
-      });
+      return sendResponse(
+        res,
+        404,
+        false,
+        "Appointment not found."
+      );
+    }
+
+    if (appointment.paymentStatus === "Paid") {
+      return sendResponse(
+        res,
+        409,
+        false,
+        "This appointment is already paid."
+      );
     }
 
     if (
-      razorpayOrderId &&
-      appointment.razorpayOrderId !==
-        razorpayOrderId
+      razorpay_order_id &&
+      appointment.razorpayOrderId !== razorpay_order_id
     ) {
-      return res.status(400).json({
-        success: false,
-        message: "Order ID does not match.",
-      });
+      return sendResponse(
+        res,
+        400,
+        false,
+        "Payment order does not match this appointment."
+      );
     }
 
-    if (appointment.paymentStatus !== "Paid") {
-      appointment.paymentStatus = "Failed";
-      appointment.status = "Pending Payment";
+    appointment.paymentStatus = "Failed";
+    appointment.status = "Pending Payment";
 
-      appointment.message = [
-        appointment.message,
-
-        errorCode
-          ? `Payment error code: ${errorCode}`
-          : "",
-
-        errorDescription
-          ? `Payment error: ${errorDescription}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      await appointment.save();
+    // Save a failure reason only if your Appointment schema supports it.
+    if (reason && appointment.schema.path("paymentFailureReason")) {
+      appointment.paymentFailureReason = String(reason).slice(0, 500);
     }
 
-    return res.status(200).json({
-      success: true,
-      message:
-        "Failed payment status recorded.",
-    });
-  } catch (error) {
-    console.error(
-      "Mark payment failed error:",
-      error
+    await appointment.save();
+
+    return sendResponse(
+      res,
+      200,
+      true,
+      "Payment failure status updated.",
+      {
+        appointmentId: appointment._id,
+        paymentStatus: appointment.paymentStatus,
+        status: appointment.status,
+      }
     );
+  } catch (error) {
+    console.error("Mark appointment payment failed error:", error);
 
-    return res.status(500).json({
-      success: false,
-      message:
-        error?.message ||
-        "Unable to record failed payment.",
-    });
+    return sendResponse(
+      res,
+      500,
+      false,
+      "Unable to update payment status."
+    );
   }
 };
