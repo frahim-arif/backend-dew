@@ -6,6 +6,7 @@ const Appointment = require("../models/Appointment");
 
 const APPOINTMENT_FEE = Number(process.env.APPOINTMENT_FEE || 500);
 
+// Standard API response
 const sendResponse = (res, statusCode, status, message, data = null) => {
   return res.status(statusCode).json({
     _status: status,
@@ -14,6 +15,14 @@ const sendResponse = (res, statusCode, status, message, data = null) => {
   });
 };
 
+// Timing helper
+const logTiming = (label, startTime) => {
+  console.log(
+    `[PAYMENT TIMING] ${label}: ${Date.now() - startTime} ms`
+  );
+};
+
+// Razorpay client
 const getRazorpay = () => {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -36,8 +45,10 @@ const getRazorpay = () => {
 // CREATE APPOINTMENT PAYMENT ORDER
 // ========================================
 exports.createAppointmentOrder = async (req, res) => {
+  const requestStart = Date.now();
+
   try {
-    const { appointmentId } = req.body;
+    const { appointmentId } = req.body || {};
 
     if (!appointmentId) {
       return sendResponse(
@@ -66,8 +77,12 @@ exports.createAppointmentOrder = async (req, res) => {
       );
     }
 
-    // Use the appointment already created by the appointments API.
+    // STEP 1: Fetch appointment from MongoDB
+    const dbFetchStart = Date.now();
+
     const appointment = await Appointment.findById(appointmentId);
+
+    logTiming("Appointment DB fetch", dbFetchStart);
 
     if (!appointment) {
       return sendResponse(
@@ -105,8 +120,11 @@ exports.createAppointmentOrder = async (req, res) => {
 
     const { client, keyId } = getRazorpay();
 
-    // Razorpay amount must be in paise.
+    // Razorpay expects the amount in paise.
     const amountInPaise = Math.round(APPOINTMENT_FEE * 100);
+
+    // STEP 2: Create order with Razorpay
+    const razorpayStart = Date.now();
 
     const order = await client.orders.create({
       amount: amountInPaise,
@@ -119,13 +137,25 @@ exports.createAppointmentOrder = async (req, res) => {
       },
     });
 
-    // Update the existing appointment; do not create another one.
+    logTiming("Razorpay order creation", razorpayStart);
+
+    // STEP 3: Save order details in MongoDB
     appointment.razorpayOrderId = order.id;
     appointment.paymentAmount = APPOINTMENT_FEE;
     appointment.paymentStatus = "Pending";
     appointment.status = "Pending Payment";
 
+    const dbSaveStart = Date.now();
+
     await appointment.save();
+
+    logTiming("Appointment DB save", dbSaveStart);
+
+    console.log(
+      `[PAYMENT TIMING] Total create-order handler: ${
+        Date.now() - requestStart
+      } ms`
+    );
 
     return sendResponse(
       res,
@@ -152,7 +182,17 @@ exports.createAppointmentOrder = async (req, res) => {
       }
     );
   } catch (error) {
-    console.error("Create appointment order error:", error);
+    console.error("Create appointment order error:", error.message);
+
+    if (error.stack) {
+      console.error(error.stack);
+    }
+
+    console.log(
+      `[PAYMENT TIMING] Failed create-order handler: ${
+        Date.now() - requestStart
+      } ms`
+    );
 
     return sendResponse(
       res,
@@ -167,13 +207,15 @@ exports.createAppointmentOrder = async (req, res) => {
 // VERIFY APPOINTMENT PAYMENT
 // ========================================
 exports.verifyAppointmentPayment = async (req, res) => {
+  const requestStart = Date.now();
+
   try {
     const {
       appointmentId,
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
-    } = req.body;
+    } = req.body || {};
 
     if (
       !appointmentId ||
@@ -200,7 +242,11 @@ exports.verifyAppointmentPayment = async (req, res) => {
 
     const { client, keySecret } = getRazorpay();
 
+    const dbFetchStart = Date.now();
+
     const appointment = await Appointment.findById(appointmentId);
+
+    logTiming("Verify: Appointment DB fetch", dbFetchStart);
 
     if (!appointment) {
       return sendResponse(
@@ -211,7 +257,7 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // The order must belong to this appointment.
+    // Ensure order belongs to this appointment.
     if (appointment.razorpayOrderId !== razorpay_order_id) {
       return sendResponse(
         res,
@@ -221,7 +267,7 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Idempotency: do not process an already verified payment again.
+    // Idempotency: already verified payment.
     if (
       appointment.paymentStatus === "Paid" &&
       appointment.razorpayPaymentId === razorpay_payment_id
@@ -249,7 +295,7 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Verify Razorpay signature using the server-side secret.
+    // Verify Razorpay signature on the server.
     const expectedSignature = crypto
       .createHmac("sha256", keySecret)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
@@ -270,8 +316,12 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Verify payment details directly with Razorpay.
+    // STEP 1: Verify payment with Razorpay
+    const razorpayVerifyStart = Date.now();
+
     const payment = await client.payments.fetch(razorpay_payment_id);
+
+    logTiming("Verify: Razorpay payment fetch", razorpayVerifyStart);
 
     if (payment.order_id !== razorpay_order_id) {
       return sendResponse(
@@ -307,13 +357,23 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Mark appointment paid only after all checks pass.
+    // STEP 2: Mark appointment as paid after verification.
     appointment.paymentStatus = "Paid";
     appointment.status = "Confirmed";
     appointment.razorpayPaymentId = razorpay_payment_id;
     appointment.paidAt = new Date();
 
+    const dbSaveStart = Date.now();
+
     await appointment.save();
+
+    logTiming("Verify: Appointment DB save", dbSaveStart);
+
+    console.log(
+      `[PAYMENT TIMING] Total verify handler: ${
+        Date.now() - requestStart
+      } ms`
+    );
 
     return sendResponse(
       res,
@@ -331,7 +391,17 @@ exports.verifyAppointmentPayment = async (req, res) => {
       }
     );
   } catch (error) {
-    console.error("Verify appointment payment error:", error);
+    console.error("Verify appointment payment error:", error.message);
+
+    if (error.stack) {
+      console.error(error.stack);
+    }
+
+    console.log(
+      `[PAYMENT TIMING] Failed verify handler: ${
+        Date.now() - requestStart
+      } ms`
+    );
 
     return sendResponse(
       res,
@@ -347,7 +417,7 @@ exports.verifyAppointmentPayment = async (req, res) => {
 // ========================================
 exports.markAppointmentPaymentFailed = async (req, res) => {
   try {
-    const { appointmentId, razorpay_order_id, reason } = req.body;
+    const { appointmentId, razorpay_order_id, reason } = req.body || {};
 
     if (!appointmentId) {
       return sendResponse(
@@ -402,7 +472,7 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
     appointment.paymentStatus = "Failed";
     appointment.status = "Pending Payment";
 
-    // Save a failure reason only if your Appointment schema supports it.
+    // Save failure reason only if the schema supports it.
     if (reason && appointment.schema.path("paymentFailureReason")) {
       appointment.paymentFailureReason = String(reason).slice(0, 500);
     }
@@ -421,7 +491,7 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
       }
     );
   } catch (error) {
-    console.error("Mark appointment payment failed error:", error);
+    console.error("Mark appointment payment failed error:", error.message);
 
     return sendResponse(
       res,
