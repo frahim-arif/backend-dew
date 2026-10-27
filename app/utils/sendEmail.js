@@ -1,5 +1,9 @@
+
 const nodemailer = require("nodemailer");
 
+// ========================================
+// GMAIL TRANSPORTER
+// ========================================
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -8,195 +12,261 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ============================
-// Hospital Notification
-// ============================
+// ========================================
+// HTML ESCAPE
+// ========================================
+const escapeHtml = (value = "") =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
+const safe = (value, fallback = "N/A") =>
+  escapeHtml(
+    value === undefined || value === null || value === ""
+      ? fallback
+      : value
+  );
+
+// ========================================
+// COMMON EMAIL SENDER
+// ========================================
+const sendEmail = async (options) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    throw new Error("EMAIL_USER or EMAIL_PASS is missing.");
+  }
+
+  try {
+    return await transporter.sendMail(options);
+  } catch (error) {
+    console.error("Dew Care email error:", error.message);
+    throw error;
+  }
+};
+
+// ========================================
+// COMMON EMAIL HEADER / APPOINTMENT DETAILS
+// ========================================
+const getAppointmentDetails = (appointment) => `
+  <table
+    cellpadding="10"
+    cellspacing="0"
+    border="1"
+    style="border-collapse:collapse;width:100%;max-width:600px;border-color:#ddd"
+  >
+    <tr>
+      <td><b>Patient Name</b></td>
+      <td>${safe(appointment.name)}</td>
+    </tr>
+    <tr>
+      <td><b>Phone</b></td>
+      <td>${safe(appointment.phone)}</td>
+    </tr>
+    <tr>
+      <td><b>Email</b></td>
+      <td>${safe(appointment.email)}</td>
+    </tr>
+    <tr>
+      <td><b>Department</b></td>
+      <td>${safe(appointment.department)}</td>
+    </tr>
+    <tr>
+      <td><b>Date</b></td>
+      <td>${safe(appointment.date)}</td>
+    </tr>
+    <tr>
+      <td><b>Time</b></td>
+      <td>${safe(appointment.time)}</td>
+    </tr>
+    <tr>
+      <td><b>Doctor</b></td>
+      <td>${safe(appointment.doctor)}</td>
+    </tr>
+  </table>
+`;
+
+const getEmailLayout = (title, content) => `
+  <div style="font-family:Arial,sans-serif;color:#172d27;line-height:1.6;max-width:650px;margin:0 auto;padding:20px">
+    <div style="background:#071c19;color:#fff;padding:22px;text-align:center">
+      <h2 style="margin:0">Dew Care Hospital</h2>
+      <p style="margin:6px 0 0;color:#e7d49b">Hospital &amp; Research Centre</p>
+    </div>
+
+    <div style="padding:24px;background:#fff;border:1px solid #eee">
+      <h2>${title}</h2>
+      ${content}
+    </div>
+
+    <div style="padding:16px;text-align:center;background:#f7f6ef;color:#555;font-size:12px">
+      Dew Care Hospital &amp; Research Centre
+      <br />
+      Dhing Road, Haibargaon, Nagaon, Assam 782002
+    </div>
+  </div>
+`;
+
+const getFromAddress = () =>
+  `"Dew Care Hospital" <${process.env.EMAIL_USER}>`;
+
+// ========================================
+// 1. HOSPITAL NOTIFICATION
+// ========================================
 const sendHospitalEmail = async (appointment) => {
-  return transporter.sendMail({
-    from: `"Dew Care Hospital" <${process.env.EMAIL_USER}>`,
+  if (!process.env.HOSPITAL_EMAIL) {
+    throw new Error("HOSPITAL_EMAIL is missing.");
+  }
+
+  const content = `
+    <p>A new appointment request has been received.</p>
+
+    ${getAppointmentDetails(appointment)}
+
+    <h3>Additional Information</h3>
+    <p><b>Age:</b> ${safe(appointment.age)}</p>
+    <p><b>Gender:</b> ${safe(appointment.gender)}</p>
+    <p><b>Problem:</b> ${safe(appointment.message)}</p>
+
+    <p>Please review the request in the hospital admin panel.</p>
+  `;
+
+  return sendEmail({
+    from: getFromAddress(),
     to: process.env.HOSPITAL_EMAIL,
-    subject: "🏥 New Appointment Request - Dew Care Hospital",
-    html: `
-      <h2>🏥 New Appointment Request</h2>
-
-      <p><b>Name:</b> ${appointment.name}</p>
-      <p><b>Phone:</b> ${appointment.phone}</p>
-      <p><b>Email:</b> ${appointment.email || "N/A"}</p>
-      <p><b>Age:</b> ${appointment.age || "N/A"}</p>
-      <p><b>Gender:</b> ${appointment.gender || "N/A"}</p>
-      <p><b>Department:</b> ${appointment.department}</p>
-      <p><b>Date:</b> ${appointment.date}</p>
-      <p><b>Doctor:</b> ${appointment.doctor || "N/A"}</p>
-      <p><b>Problem:</b> ${appointment.message || "N/A"}</p>
-    `,
+    subject: "New Appointment Request - Dew Care Hospital",
+    html: getEmailLayout("New Appointment Request", content),
   });
 };
 
-// ============================
-// Booking Received Email
-// ============================
-
+// ========================================
+// 2. PATIENT BOOKING RECEIVED EMAIL
+// ========================================
 const sendPatientEmail = async (appointment) => {
-  if (!appointment.email) return;
+  if (!appointment.email) return null;
 
-  return transporter.sendMail({
-    from: `"Dew Care Hospital" <${process.env.EMAIL_USER}>`,
+  const content = `
+    <p>Dear <b>${safe(appointment.name, "Patient")}</b>,</p>
+
+    <p>
+      Thank you for choosing Dew Care Hospital.
+      We have successfully received your appointment request.
+    </p>
+
+    ${getAppointmentDetails(appointment)}
+
+    <p>
+      Our team will review your request and contact you shortly.
+      This email confirms receipt of your request, not final appointment
+      confirmation.
+    </p>
+
+    <p>Regards,<br /><b>Dew Care Hospital</b></p>
+  `;
+
+  return sendEmail({
+    from: getFromAddress(),
     to: appointment.email,
-    subject: "✅ Appointment Request Received",
-    html: `
-      <h2>Appointment Request Received</h2>
-
-      <p>Dear <b>${appointment.name}</b>,</p>
-
-      <p>
-        Thank you for choosing Dew Care Hospital.
-      </p>
-
-      <p>
-        We have successfully received your appointment request.
-        Our team will review it and contact you shortly.
-      </p>
-
-      <hr>
-
-      <h3>Appointment Details</h3>
-
-      <p><b>Department:</b> ${appointment.department}</p>
-      <p><b>Date:</b> ${appointment.date}</p>
-      <p><b>Doctor:</b> ${appointment.doctor || "-"}</p>
-
-      <br>
-
-      <b>Dew Care Hospital</b>
-    `,
+    subject: "Appointment Request Received - Dew Care Hospital",
+    html: getEmailLayout("Appointment Request Received", content),
   });
 };
 
-// ============================
-// Appointment Confirmed
-// ============================
-
+// ========================================
+// 3. APPOINTMENT CONFIRMATION EMAIL
+// ========================================
 const sendConfirmationEmail = async (appointment) => {
-  if (!appointment.email) return;
+  if (!appointment.email) return null;
 
-  return transporter.sendMail({
-    from: `"Dew Care Hospital" <${process.env.EMAIL_USER}>`,
+  const content = `
+    <p>Dear <b>${safe(appointment.name, "Patient")}</b>,</p>
+
+    <p style="color:#16a34a;font-weight:bold">
+      Your appointment has been confirmed successfully.
+    </p>
+
+    ${getAppointmentDetails(appointment)}
+
+    <p>Please arrive 15 minutes before your appointment.</p>
+
+    <p>Regards,<br /><b>Dew Care Hospital</b></p>
+  `;
+
+  return sendEmail({
+    from: getFromAddress(),
     to: appointment.email,
-    subject: "✅ Appointment Confirmed",
-
-    html: `
-    <h2 style="color:#16a34a">
-      Your Appointment has been Confirmed
-    </h2>
-
-    <p>Dear <b>${appointment.name}</b>,</p>
-
-    <p>
-      Your appointment has been successfully confirmed.
-    </p>
-
-    <table border="1" cellpadding="10" style="border-collapse:collapse">
-
-      <tr>
-        <td><b>Department</b></td>
-        <td>${appointment.department}</td>
-      </tr>
-
-      <tr>
-        <td><b>Date</b></td>
-        <td>${appointment.date}</td>
-      </tr>
-
-      <tr>
-        <td><b>Doctor</b></td>
-        <td>${appointment.doctor || "-"}</td>
-      </tr>
-
-    </table>
-
-    <br>
-
-    <p>
-      Please arrive 15 minutes before your appointment.
-    </p>
-
-    <br>
-
-    <b>Dew Care Hospital</b>
-    `,
+    subject: "Appointment Confirmed - Dew Care Hospital",
+    html: getEmailLayout("Appointment Confirmed", content),
   });
 };
 
-// ============================
-// Appointment Completed
-// ============================
-
+// ========================================
+// 4. APPOINTMENT COMPLETED EMAIL
+// ========================================
 const sendCompletedEmail = async (appointment) => {
-  if (!appointment.email) return;
+  if (!appointment.email) return null;
 
-  return transporter.sendMail({
-    from: `"Dew Care Hospital" <${process.env.EMAIL_USER}>`,
+  const content = `
+    <p>Dear <b>${safe(appointment.name, "Patient")}</b>,</p>
+
+    <p>
+      Your appointment with
+      <b>${safe(appointment.doctor, "our doctor")}</b>
+      has been completed successfully.
+    </p>
+
+    <p>Thank you for visiting Dew Care Hospital. We wish you good health.</p>
+
+    <p>Regards,<br /><b>Dew Care Hospital</b></p>
+  `;
+
+  return sendEmail({
+    from: getFromAddress(),
     to: appointment.email,
-    subject: "✔ Appointment Completed",
-
-    html: `
-    <h2 style="color:#2563eb">
-      Thank You For Visiting Dew Care Hospital
-    </h2>
-
-    <p>Dear <b>${appointment.name}</b>,</p>
-
-    <p>
-      Your appointment with <b>${appointment.doctor || "our doctor"}</b> has been completed successfully.
-    </p>
-
-    <p>
-      We wish you good health.
-    </p>
-
-    <br>
-
-    <b>Dew Care Hospital</b>
-    `,
+    subject: "Appointment Completed - Dew Care Hospital",
+    html: getEmailLayout("Thank You for Visiting Us", content),
   });
 };
 
-// ============================
-// Appointment Cancelled
-// ============================
-
+// ========================================
+// 5. APPOINTMENT CANCELLED EMAIL
+// ========================================
 const sendCancelledEmail = async (appointment) => {
-  if (!appointment.email) return;
+  if (!appointment.email) return null;
 
-  return transporter.sendMail({
-    from: `"Dew Care Hospital" <${process.env.EMAIL_USER}>`,
+  const content = `
+    <p>Dear <b>${safe(appointment.name, "Patient")}</b>,</p>
+
+    <p style="color:#dc2626;font-weight:bold">
+      Unfortunately, your appointment has been cancelled.
+    </p>
+
+    <p>
+      Doctor:
+      <b>${safe(appointment.doctor, "our doctor")}</b>
+    </p>
+
+    ${getAppointmentDetails(appointment)}
+
+    <p>
+      Please contact Dew Care Hospital if you would like to schedule
+      another appointment.
+    </p>
+
+    <p>Regards,<br /><b>Dew Care Hospital</b></p>
+  `;
+
+  return sendEmail({
+    from: getFromAddress(),
     to: appointment.email,
-    subject: "❌ Appointment Cancelled",
-
-    html: `
-    <h2 style="color:#dc2626">
-      Appointment Cancelled
-    </h2>
-
-    <p>Dear <b>${appointment.name}</b>,</p>
-
-    <p>
-      Unfortunately your appointment with
-      <b>${appointment.doctor || "our doctor"}</b> has been cancelled.
-    </p>
-
-    <p>
-      Please contact Dew Care Hospital to schedule another appointment.
-    </p>
-
-    <br>
-
-    <b>Dew Care Hospital</b>
-    `,
+    subject: "Appointment Cancelled - Dew Care Hospital",
+    html: getEmailLayout("Appointment Cancelled", content),
   });
 };
 
+// ========================================
+// EXPORT ALL FUNCTIONS
+// ========================================
 module.exports = {
   sendHospitalEmail,
   sendPatientEmail,
