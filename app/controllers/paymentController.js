@@ -244,11 +244,17 @@ exports.createAppointmentOrder = async (req, res) => {
         appointmentTime: appointment.time,
       }
     );
+ 
   } catch (error) {
-    console.error(
-      "Create appointment order error:",
-      error.message
-    );
+    console.error("Create appointment order error:", {
+      message: error?.message || String(error),
+      name: error?.name,
+      statusCode: error?.statusCode,
+      code: error?.code,
+      description: error?.error?.description,
+      razorpayError: error?.error,
+      stack: error?.stack,
+    });
 
     console.log(
       `[PAYMENT TIMING] Failed create-order handler: ${
@@ -264,6 +270,7 @@ exports.createAppointmentOrder = async (req, res) => {
     );
   }
 };
+
 
 // ========================================
 // VERIFY APPOINTMENT PAYMENT
