@@ -1,16 +1,5 @@
 
-const nodemailer = require("nodemailer");
-
-// ========================================
-// GMAIL TRANSPORTER
-// ========================================
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+const RESEND_API_URL = "https://api.resend.com/emails";
 
 // ========================================
 // HTML ESCAPE
@@ -31,15 +20,103 @@ const safe = (value, fallback = "N/A") =>
   );
 
 // ========================================
-// COMMON EMAIL SENDER
+// SENDER ADDRESS
+// ========================================
+const getFromAddress = () => {
+  const from = process.env.EMAIL_FROM;
+
+  if (!from) {
+    throw new Error("EMAIL_FROM is missing.");
+  }
+
+  return from;
+};
+
+// ========================================
+// COMMON EMAIL SENDER - RESEND API
 // ========================================
 const sendEmail = async (options) => {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    throw new Error("EMAIL_USER or EMAIL_PASS is missing.");
+  const apiKey = process.env.RESEND_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("RESEND_API_KEY is missing.");
+  }
+
+  if (
+    !options ||
+    !options.to ||
+    !options.subject ||
+    !options.html
+  ) {
+    throw new Error("Required email fields are missing.");
+  }
+
+  const from = options.from || getFromAddress();
+
+  const recipients = Array.isArray(options.to)
+    ? options.to
+    : [options.to];
+
+  if (
+    recipients.length === 0 ||
+    recipients.some(
+      (recipient) =>
+        typeof recipient !== "string" ||
+        !recipient.trim()
+    )
+  ) {
+    throw new Error("A valid email recipient is required.");
+  }
+
+  const payload = {
+    from,
+    to: recipients,
+    subject: options.subject,
+    html: options.html,
+  };
+
+  // Preserve optional plain-text content and reply-to settings.
+  if (options.text) {
+    payload.text = options.text;
+  }
+
+  if (options.replyTo || options.reply_to) {
+    payload.reply_to = options.replyTo || options.reply_to;
   }
 
   try {
-    return await transporter.sendMail(options);
+    const response = await fetch(RESEND_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      console.error("Resend API error:", {
+        status: response.status,
+        message:
+          result.message ||
+          result.name ||
+          "Email request failed",
+      });
+
+      throw new Error(
+        `Resend API failed with HTTP ${response.status}`
+      );
+    }
+
+    console.log("Email accepted by Resend:", {
+      id: result.id,
+      to: recipients,
+    });
+
+    return result;
   } catch (error) {
     console.error("Dew Care email error:", error.message);
     throw error;
@@ -47,7 +124,7 @@ const sendEmail = async (options) => {
 };
 
 // ========================================
-// COMMON EMAIL HEADER / APPOINTMENT DETAILS
+// APPOINTMENT DETAILS TABLE
 // ========================================
 const getAppointmentDetails = (appointment) => `
   <table
@@ -87,15 +164,20 @@ const getAppointmentDetails = (appointment) => `
   </table>
 `;
 
+// ========================================
+// COMMON EMAIL LAYOUT
+// ========================================
 const getEmailLayout = (title, content) => `
   <div style="font-family:Arial,sans-serif;color:#172d27;line-height:1.6;max-width:650px;margin:0 auto;padding:20px">
     <div style="background:#071c19;color:#fff;padding:22px;text-align:center">
       <h2 style="margin:0">Dew Care Hospital</h2>
-      <p style="margin:6px 0 0;color:#e7d49b">Hospital &amp; Research Centre</p>
+      <p style="margin:6px 0 0;color:#e7d49b">
+        Hospital &amp; Research Centre
+      </p>
     </div>
 
     <div style="padding:24px;background:#fff;border:1px solid #eee">
-      <h2>${title}</h2>
+      <h2>${escapeHtml(title)}</h2>
       ${content}
     </div>
 
@@ -106,9 +188,6 @@ const getEmailLayout = (title, content) => `
     </div>
   </div>
 `;
-
-const getFromAddress = () =>
-  `"Dew Care Hospital" <${process.env.EMAIL_USER}>`;
 
 // ========================================
 // 1. HOSPITAL NOTIFICATION
@@ -215,7 +294,10 @@ const sendCompletedEmail = async (appointment) => {
       has been completed successfully.
     </p>
 
-    <p>Thank you for visiting Dew Care Hospital. We wish you good health.</p>
+    <p>
+      Thank you for visiting Dew Care Hospital.
+      We wish you good health.
+    </p>
 
     <p>Regards,<br /><b>Dew Care Hospital</b></p>
   `;
