@@ -79,6 +79,15 @@ const appointmentSchema = new mongoose.Schema(
       default: "Pending",
     },
 
+    
+    // Payment Failure Reason
+    paymentFailureReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
+
     // Appointment Fee
     paymentAmount: {
       type: Number,

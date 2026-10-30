@@ -6,7 +6,13 @@ const Razorpay = require("razorpay");
 const Appointment = require("../models/Appointment");
 const Doctor = require("../models/Doctor");
 
-// Standard API response
+const {
+  writePaymentAudit,
+} = require("../utils/paymentAudit");
+
+// ========================================
+// STANDARD API RESPONSE
+// ========================================
 const sendResponse = (
   res,
   statusCode,
@@ -21,14 +27,25 @@ const sendResponse = (
   });
 };
 
-// Timing helper
+// ========================================
+// TIMING HELPER
+// ========================================
 const logTiming = (label, startTime) => {
   console.log(
     `[PAYMENT TIMING] ${label}: ${Date.now() - startTime} ms`
   );
 };
 
-// Razorpay client
+// ========================================
+// AUDIT HELPER
+// ========================================
+const audit = async (data) => {
+  return writePaymentAudit(data);
+};
+
+// ========================================
+// RAZORPAY CLIENT
+// ========================================
 const getRazorpay = () => {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -51,10 +68,10 @@ const getRazorpay = () => {
 
 // ========================================
 // CREATE APPOINTMENT PAYMENT ORDER
-// Fee comes from the Doctor database record.
 // ========================================
 exports.createAppointmentOrder = async (req, res) => {
   const requestStart = Date.now();
+  let auditAppointmentId = null;
 
   try {
     const { appointmentId } = req.body || {};
@@ -63,6 +80,15 @@ exports.createAppointmentOrder = async (req, res) => {
       !appointmentId ||
       !mongoose.Types.ObjectId.isValid(appointmentId)
     ) {
+      await audit({
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Invalid or missing appointment ID",
+        request: {
+          appointmentId: appointmentId || null,
+        },
+      });
+
       return sendResponse(
         res,
         400,
@@ -71,7 +97,7 @@ exports.createAppointmentOrder = async (req, res) => {
       );
     }
 
-    // STEP 1: Fetch appointment
+    // STEP 1: FETCH APPOINTMENT
     const dbFetchStart = Date.now();
 
     const appointment = await Appointment.findById(
@@ -81,6 +107,13 @@ exports.createAppointmentOrder = async (req, res) => {
     logTiming("Appointment DB fetch", dbFetchStart);
 
     if (!appointment) {
+      await audit({
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Appointment not found",
+        request: { appointmentId },
+      });
+
       return sendResponse(
         res,
         404,
@@ -88,6 +121,8 @@ exports.createAppointmentOrder = async (req, res) => {
         "Appointment not found."
       );
     }
+
+    auditAppointmentId = appointment._id;
 
     if (
       !appointment.name ||
@@ -97,6 +132,13 @@ exports.createAppointmentOrder = async (req, res) => {
       !appointment.doctor ||
       !appointment.doctorId
     ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Appointment details are incomplete",
+      });
+
       return sendResponse(
         res,
         400,
@@ -106,6 +148,15 @@ exports.createAppointmentOrder = async (req, res) => {
     }
 
     if (appointment.paymentStatus === "Paid") {
+      await audit({
+        appointmentId: appointment._id,
+        event: "DUPLICATE_ORDER_REQUEST",
+        orderId: appointment.razorpayOrderId,
+        paymentId: appointment.razorpayPaymentId,
+        status: "REJECTED",
+        error: "Appointment is already paid",
+      });
+
       return sendResponse(
         res,
         409,
@@ -114,7 +165,7 @@ exports.createAppointmentOrder = async (req, res) => {
       );
     }
 
-    // STEP 2: Fetch doctor and use database OPD fee
+    // STEP 2: FETCH DOCTOR
     const doctorFetchStart = Date.now();
 
     const doctor = await Doctor.findById(
@@ -124,6 +175,13 @@ exports.createAppointmentOrder = async (req, res) => {
     logTiming("Doctor DB fetch", doctorFetchStart);
 
     if (!doctor) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Doctor not found",
+      });
+
       return sendResponse(
         res,
         404,
@@ -133,6 +191,13 @@ exports.createAppointmentOrder = async (req, res) => {
     }
 
     if (doctor.status !== "Active") {
+      await audit({
+        appointmentId: appointment._id,
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Doctor is inactive",
+      });
+
       return sendResponse(
         res,
         400,
@@ -142,6 +207,13 @@ exports.createAppointmentOrder = async (req, res) => {
     }
 
     if (doctor.opdAvailable !== true) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Doctor OPD is unavailable",
+      });
+
       return sendResponse(
         res,
         400,
@@ -150,12 +222,20 @@ exports.createAppointmentOrder = async (req, res) => {
       );
     }
 
+    // STEP 3: GET FEE FROM DATABASE
     const doctorFee = Number(doctor.opdFee);
 
     if (
       !Number.isFinite(doctorFee) ||
       doctorFee <= 0
     ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Invalid doctor OPD fee",
+      });
+
       return sendResponse(
         res,
         400,
@@ -164,14 +244,21 @@ exports.createAppointmentOrder = async (req, res) => {
       );
     }
 
-    // Use the current fee from the database.
-    // Never accept the fee from the frontend.
-    const amountInPaise = Math.round(doctorFee * 100);
+    const amountInPaise = Math.round(
+      doctorFee * 100
+    );
 
     if (
       !Number.isSafeInteger(amountInPaise) ||
       amountInPaise <= 0
     ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "ORDER_CREATE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Invalid payment amount",
+      });
+
       return sendResponse(
         res,
         400,
@@ -182,37 +269,93 @@ exports.createAppointmentOrder = async (req, res) => {
 
     const { client, keyId } = getRazorpay();
 
-    // STEP 3: Create Razorpay order
-    const razorpayStart = Date.now();
+    const receipt = `apt_${appointment._id.toString()}`.slice(
+      0,
+      40
+    );
 
-    const order = await client.orders.create({
+    const orderRequest = {
       amount: amountInPaise,
       currency: "INR",
-      receipt: `apt_${appointment._id.toString()}`.slice(
-        0,
-        40
-      ),
+      receipt,
       notes: {
         appointmentId: appointment._id.toString(),
         doctorId: doctor._id.toString(),
         doctorName: String(doctor.name),
-        patientName: String(appointment.name),
+      },
+    };
+
+    // STEP 4: LOG ORDER REQUEST
+    await audit({
+      appointmentId: appointment._id,
+      event: "RAZORPAY_ORDER_CREATE_REQUEST",
+      amountPaise: amountInPaise,
+      currency: "INR",
+      status: "REQUESTED",
+      request: orderRequest,
+    });
+
+    // STEP 5: CREATE RAZORPAY ORDER
+    const razorpayStart = Date.now();
+
+    const order = await client.orders.create(
+      orderRequest
+    );
+
+    logTiming(
+      "Razorpay order creation",
+      razorpayStart
+    );
+
+    // STEP 6: LOG RAZORPAY RESPONSE
+    await audit({
+      appointmentId: appointment._id,
+      event: "RAZORPAY_ORDER_CREATE_RESPONSE",
+      orderId: order.id,
+      amountPaise: order.amount,
+      currency: order.currency,
+      status: "SUCCESS",
+      response: {
+        id: order.id,
+        entity: order.entity,
+        amount: order.amount,
+        currency: order.currency,
+        status: order.status,
+        receipt: order.receipt,
+        created_at: order.created_at,
       },
     });
 
-    logTiming("Razorpay order creation", razorpayStart);
-
-    // STEP 4: Save order and the exact fee charged
+    // STEP 7: SAVE ORDER IN DATABASE
     appointment.razorpayOrderId = order.id;
     appointment.paymentAmount = doctorFee;
     appointment.paymentStatus = "Pending";
+    appointment.paymentFailureReason = "";
     appointment.status = "Pending Payment";
 
     const dbSaveStart = Date.now();
 
     await appointment.save();
 
-    logTiming("Appointment DB save", dbSaveStart);
+    logTiming(
+      "Appointment DB save",
+      dbSaveStart
+    );
+
+    // STEP 8: DATABASE AUDIT
+    await audit({
+      appointmentId: appointment._id,
+      event: "APPOINTMENT_PAYMENT_PENDING_DB",
+      orderId: order.id,
+      amountPaise: order.amount,
+      currency: order.currency,
+      status: "DB_SAVED",
+      response: {
+        paymentStatus: appointment.paymentStatus,
+        appointmentStatus: appointment.status,
+        paymentAmount: appointment.paymentAmount,
+      },
+    });
 
     console.log(
       `[PAYMENT TIMING] Total create-order handler: ${
@@ -220,6 +363,7 @@ exports.createAppointmentOrder = async (req, res) => {
       } ms`
     );
 
+    // STEP 9: SUCCESS RESPONSE
     return sendResponse(
       res,
       200,
@@ -244,22 +388,33 @@ exports.createAppointmentOrder = async (req, res) => {
         appointmentTime: appointment.time,
       }
     );
- 
   } catch (error) {
-    console.error("Create appointment order error:", {
-      message: error?.message || String(error),
-      name: error?.name,
-      statusCode: error?.statusCode,
-      code: error?.code,
-      description: error?.error?.description,
-      razorpayError: error?.error,
-      stack: error?.stack,
+    console.error(
+      "Create appointment order error:",
+      {
+        message: error?.message,
+        name: error?.name,
+        statusCode: error?.statusCode,
+        code: error?.code,
+        description: error?.error?.description,
+      }
+    );
+
+    await audit({
+      appointmentId: auditAppointmentId,
+      event: "RAZORPAY_ORDER_CREATE_ERROR",
+      status: "FAILED",
+      error: error?.message || "Order creation failed",
+      response: {
+        errorName: error?.name || "",
+        errorCode: error?.code || "",
+        statusCode: error?.statusCode || null,
+      },
     });
 
-    console.log(
-      `[PAYMENT TIMING] Failed create-order handler: ${
-        Date.now() - requestStart
-      } ms`
+    logTiming(
+      "Failed create-order handler",
+      requestStart
     );
 
     return sendResponse(
@@ -271,12 +426,14 @@ exports.createAppointmentOrder = async (req, res) => {
   }
 };
 
-
 // ========================================
 // VERIFY APPOINTMENT PAYMENT
 // ========================================
 exports.verifyAppointmentPayment = async (req, res) => {
   const requestStart = Date.now();
+  let auditAppointmentId = null;
+  let auditOrderId = "";
+  let auditPaymentId = "";
 
   try {
     const {
@@ -286,12 +443,29 @@ exports.verifyAppointmentPayment = async (req, res) => {
       razorpay_signature,
     } = req.body || {};
 
+    auditOrderId = razorpay_order_id || "";
+    auditPaymentId = razorpay_payment_id || "";
+
     if (
       !appointmentId ||
       !razorpay_order_id ||
       !razorpay_payment_id ||
       !razorpay_signature
     ) {
+      await audit({
+        event: "PAYMENT_VERIFICATION_VALIDATION_FAILED",
+        orderId: auditOrderId,
+        paymentId: auditPaymentId,
+        status: "REJECTED",
+        error: "Required verification details are missing",
+        request: {
+          appointmentId: appointmentId || null,
+          orderIdProvided: Boolean(razorpay_order_id),
+          paymentIdProvided: Boolean(razorpay_payment_id),
+          signatureProvided: Boolean(razorpay_signature),
+        },
+      });
+
       return sendResponse(
         res,
         400,
@@ -301,6 +475,14 @@ exports.verifyAppointmentPayment = async (req, res) => {
     }
 
     if (!mongoose.Types.ObjectId.isValid(appointmentId)) {
+      await audit({
+        event: "PAYMENT_VERIFICATION_VALIDATION_FAILED",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        status: "REJECTED",
+        error: "Invalid appointment ID",
+      });
+
       return sendResponse(
         res,
         400,
@@ -311,15 +493,27 @@ exports.verifyAppointmentPayment = async (req, res) => {
 
     const { client, keySecret } = getRazorpay();
 
+    // STEP 1: FETCH APPOINTMENT
     const dbFetchStart = Date.now();
 
     const appointment = await Appointment.findById(
       appointmentId
     );
 
-    logTiming("Verify: Appointment DB fetch", dbFetchStart);
+    logTiming(
+      "Verify: Appointment DB fetch",
+      dbFetchStart
+    );
 
     if (!appointment) {
+      await audit({
+        event: "PAYMENT_VERIFICATION_FAILED",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        status: "REJECTED",
+        error: "Appointment not found",
+      });
+
       return sendResponse(
         res,
         404,
@@ -328,9 +522,39 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
+    auditAppointmentId = appointment._id;
+
+    // STEP 2: LOG VERIFICATION REQUEST
+    await audit({
+      appointmentId: appointment._id,
+      event: "PAYMENT_VERIFICATION_REQUEST",
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      status: "REQUESTED",
+      request: {
+        appointmentId: appointment._id.toString(),
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        signatureProvided: true,
+      },
+    });
+
+    // STEP 3: MATCH ORDER
     if (
       appointment.razorpayOrderId !== razorpay_order_id
     ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_ORDER_MISMATCH",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        status: "REJECTED",
+        error: "Payment order does not match appointment",
+        verification: {
+          orderMatched: false,
+        },
+      });
+
       return sendResponse(
         res,
         400,
@@ -339,11 +563,22 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Idempotency: already verified payment
+    // STEP 4: IDEMPOTENCY
     if (
       appointment.paymentStatus === "Paid" &&
       appointment.razorpayPaymentId === razorpay_payment_id
     ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_ALREADY_VERIFIED",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        status: "VERIFIED",
+        verification: {
+          alreadyPaid: true,
+        },
+      });
+
       return sendResponse(
         res,
         200,
@@ -359,6 +594,15 @@ exports.verifyAppointmentPayment = async (req, res) => {
     }
 
     if (appointment.paymentStatus === "Paid") {
+      await audit({
+        appointmentId: appointment._id,
+        event: "DUPLICATE_PAYMENT_REJECTED",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        status: "REJECTED",
+        error: "Another payment is already recorded",
+      });
+
       return sendResponse(
         res,
         409,
@@ -367,7 +611,7 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Verify signature on the server
+    // STEP 5: VERIFY HMAC SIGNATURE
     const expectedSignature = crypto
       .createHmac("sha256", keySecret)
       .update(
@@ -379,15 +623,30 @@ exports.verifyAppointmentPayment = async (req, res) => {
       razorpay_signature,
       "hex"
     );
+
     const expected = Buffer.from(
       expectedSignature,
       "hex"
     );
 
-    if (
-      received.length !== expected.length ||
-      !crypto.timingSafeEqual(received, expected)
-    ) {
+    const signatureValid =
+      received.length === expected.length &&
+      crypto.timingSafeEqual(received, expected);
+
+    if (!signatureValid) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_SIGNATURE_VERIFICATION",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        status: "REJECTED",
+        verification: {
+          signatureValid: false,
+          verificationMethod: "HMAC-SHA256",
+        },
+        error: "Invalid payment signature",
+      });
+
       return sendResponse(
         res,
         400,
@@ -396,7 +655,19 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Confirm payment directly with Razorpay
+    await audit({
+      appointmentId: appointment._id,
+      event: "PAYMENT_SIGNATURE_VERIFICATION",
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      status: "VERIFIED",
+      verification: {
+        signatureValid: true,
+        verificationMethod: "HMAC-SHA256",
+      },
+    });
+
+    // STEP 6: FETCH ACTUAL PAYMENT FROM RAZORPAY
     const razorpayVerifyStart = Date.now();
 
     const payment = await client.payments.fetch(
@@ -408,7 +679,42 @@ exports.verifyAppointmentPayment = async (req, res) => {
       razorpayVerifyStart
     );
 
+    await audit({
+      appointmentId: appointment._id,
+      event: "RAZORPAY_PAYMENT_FETCH_RESPONSE",
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      amountPaise: payment.amount,
+      currency: payment.currency,
+      status:
+        payment.status === "captured"
+          ? "SUCCESS"
+          : "FAILED",
+      response: {
+        id: payment.id,
+        order_id: payment.order_id,
+        amount: payment.amount,
+        currency: payment.currency,
+        status: payment.status,
+        captured: payment.captured,
+        method: payment.method,
+      },
+    });
+
+    // STEP 7: VERIFY RAZORPAY ORDER ID
     if (payment.order_id !== razorpay_order_id) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_ORDER_VERIFICATION_FAILED",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        status: "REJECTED",
+        error: "Razorpay payment order ID mismatch",
+        verification: {
+          orderMatched: false,
+        },
+      });
+
       return sendResponse(
         res,
         400,
@@ -417,7 +723,22 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
+    // STEP 8: VERIFY CAPTURED STATUS
     if (payment.status !== "captured") {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_CAPTURE_VERIFICATION_FAILED",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        amountPaise: payment.amount,
+        currency: payment.currency,
+        status: "REJECTED",
+        error: `Payment status is ${payment.status}`,
+        verification: {
+          paymentCaptured: false,
+        },
+      });
+
       return sendResponse(
         res,
         400,
@@ -426,7 +747,7 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Verify against the amount saved when the order was created
+    // STEP 9: VERIFY AMOUNT AND CURRENCY
     const expectedAmount = Math.round(
       Number(appointment.paymentAmount) * 100
     );
@@ -437,6 +758,25 @@ exports.verifyAppointmentPayment = async (req, res) => {
       payment.amount !== expectedAmount ||
       payment.currency !== "INR"
     ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_AMOUNT_VERIFICATION_FAILED",
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        amountPaise: payment.amount,
+        currency: payment.currency,
+        status: "REJECTED",
+        error: "Payment amount or currency mismatch",
+        verification: {
+          expectedAmountPaise: expectedAmount,
+          receivedAmountPaise: payment.amount,
+          expectedCurrency: "INR",
+          receivedCurrency: payment.currency,
+          amountMatched: payment.amount === expectedAmount,
+          currencyMatched: payment.currency === "INR",
+        },
+      });
+
       return sendResponse(
         res,
         400,
@@ -445,17 +785,55 @@ exports.verifyAppointmentPayment = async (req, res) => {
       );
     }
 
-    // Mark appointment paid only after successful verification
+    // STEP 10: FINAL VERIFICATION LOG
+    await audit({
+      appointmentId: appointment._id,
+      event: "PAYMENT_FINAL_VERIFICATION",
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      amountPaise: payment.amount,
+      currency: payment.currency,
+      status: "VERIFIED",
+      verification: {
+        signatureValid: true,
+        orderMatched: true,
+        amountMatched: true,
+        currencyMatched: true,
+        paymentCaptured: true,
+      },
+    });
+
+    // STEP 11: UPDATE DATABASE
     appointment.paymentStatus = "Paid";
     appointment.status = "Confirmed";
     appointment.razorpayPaymentId = razorpay_payment_id;
     appointment.paidAt = new Date();
+    appointment.paymentFailureReason = "";
 
     const dbSaveStart = Date.now();
 
     await appointment.save();
 
-    logTiming("Verify: Appointment DB save", dbSaveStart);
+    logTiming(
+      "Verify: Appointment DB save",
+      dbSaveStart
+    );
+
+    // STEP 12: DATABASE CONFIRMATION LOG
+    await audit({
+      appointmentId: appointment._id,
+      event: "PAYMENT_SUCCESS_DATABASE_UPDATE",
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      amountPaise: payment.amount,
+      currency: payment.currency,
+      status: "DB_SAVED",
+      response: {
+        paymentStatus: appointment.paymentStatus,
+        appointmentStatus: appointment.status,
+        paidAt: appointment.paidAt,
+      },
+    });
 
     console.log(
       `[PAYMENT TIMING] Total verify handler: ${
@@ -463,6 +841,7 @@ exports.verifyAppointmentPayment = async (req, res) => {
       } ms`
     );
 
+    // STEP 13: SUCCESS RESPONSE
     return sendResponse(
       res,
       200,
@@ -484,10 +863,18 @@ exports.verifyAppointmentPayment = async (req, res) => {
       error.message
     );
 
-    console.log(
-      `[PAYMENT TIMING] Failed verify handler: ${
-        Date.now() - requestStart
-      } ms`
+    await audit({
+      appointmentId: auditAppointmentId,
+      event: "PAYMENT_VERIFICATION_ERROR",
+      orderId: auditOrderId,
+      paymentId: auditPaymentId,
+      status: "FAILED",
+      error: error?.message || "Payment verification failed",
+    });
+
+    logTiming(
+      "Failed verify handler",
+      requestStart
     );
 
     return sendResponse(
@@ -503,6 +890,8 @@ exports.verifyAppointmentPayment = async (req, res) => {
 // MARK APPOINTMENT PAYMENT FAILED
 // ========================================
 exports.markAppointmentPaymentFailed = async (req, res) => {
+  let auditAppointmentId = null;
+
   try {
     const {
       appointmentId,
@@ -514,6 +903,12 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
       !appointmentId ||
       !mongoose.Types.ObjectId.isValid(appointmentId)
     ) {
+      await audit({
+        event: "PAYMENT_FAILURE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Invalid appointment ID",
+      });
+
       return sendResponse(
         res,
         400,
@@ -527,6 +922,12 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
     );
 
     if (!appointment) {
+      await audit({
+        event: "PAYMENT_FAILURE_VALIDATION_FAILED",
+        status: "REJECTED",
+        error: "Appointment not found",
+      });
+
       return sendResponse(
         res,
         404,
@@ -535,7 +936,18 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
       );
     }
 
+    auditAppointmentId = appointment._id;
+
     if (appointment.paymentStatus === "Paid") {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_FAILURE_REJECTED_ALREADY_PAID",
+        orderId: appointment.razorpayOrderId,
+        paymentId: appointment.razorpayPaymentId,
+        status: "REJECTED",
+        error: "Appointment is already paid",
+      });
+
       return sendResponse(
         res,
         409,
@@ -548,6 +960,14 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
       razorpay_order_id &&
       appointment.razorpayOrderId !== razorpay_order_id
     ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "PAYMENT_FAILURE_ORDER_MISMATCH",
+        orderId: razorpay_order_id,
+        status: "REJECTED",
+        error: "Payment order does not match appointment",
+      });
+
       return sendResponse(
         res,
         400,
@@ -556,19 +976,28 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
       );
     }
 
+    // UPDATE FAILURE STATUS
     appointment.paymentStatus = "Failed";
     appointment.status = "Pending Payment";
 
-    if (
-      reason &&
-      appointment.schema.path("paymentFailureReason")
-    ) {
-      appointment.paymentFailureReason = String(
-        reason
-      ).slice(0, 500);
-    }
+    appointment.paymentFailureReason = String(
+      reason || "Payment failed or cancelled by customer"
+    ).slice(0, 500);
 
     await appointment.save();
+
+    // LOG FAILURE DATABASE UPDATE
+    await audit({
+      appointmentId: appointment._id,
+      event: "PAYMENT_FAILURE_DATABASE_UPDATE",
+      orderId: appointment.razorpayOrderId,
+      status: "FAILED",
+      error: appointment.paymentFailureReason,
+      response: {
+        paymentStatus: appointment.paymentStatus,
+        appointmentStatus: appointment.status,
+      },
+    });
 
     return sendResponse(
       res,
@@ -586,6 +1015,13 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
       "Mark appointment payment failed error:",
       error.message
     );
+
+    await audit({
+      appointmentId: auditAppointmentId,
+      event: "PAYMENT_FAILURE_UPDATE_ERROR",
+      status: "FAILED",
+      error: error?.message || "Unable to update payment status",
+    });
 
     return sendResponse(
       res,
