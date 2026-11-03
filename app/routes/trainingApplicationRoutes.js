@@ -1,84 +1,16 @@
-const express = require("express");
+const router = require("express").Router();
+const controller = require("../controllers/trainingApplicationController");
+const trainingUpload = require("../middleware/trainingUpload");
 
-const {
-  getApplications,
-  createApplication,
-  getApplication,
-  updateApplication,
-  updateApplicationStatus,
-  deleteApplication,
-  getApplicationStats,
-} = require("../controllers/trainingApplicationController");
+// Public application + batch availability
+router.get("/batches", controller.getBatches);
+router.post("/", trainingUpload, controller.createApplication);
 
-// const { protect, adminOnly } = require("../middleware/authMiddleware");
-// const upload = require("../middleware/upload");
-
-const router = express.Router();
-
-/*
-|--------------------------------------------------------------------------
-| Dashboard
-|--------------------------------------------------------------------------
-*/
-
-router.get(
-  "/stats",
-  // protect,
-  // adminOnly,
-  getApplicationStats
-);
-
-/*
-|--------------------------------------------------------------------------
-| Public
-|--------------------------------------------------------------------------
-*/
-
-router.post(
-  "/",
-  // upload.single("photo"),
-  createApplication
-);
-
-/*
-|--------------------------------------------------------------------------
-| Admin
-|--------------------------------------------------------------------------
-*/
-
-router.get(
-  "/",
-  // protect,
-  // adminOnly,
-  getApplications
-);
-
-router.get(
-  "/:id",
-  // protect,
-  // adminOnly,
-  getApplication
-);
-
-router.put(
-  "/:id",
-  // protect,
-  // adminOnly,
-  updateApplication
-);
-
-router.patch(
-  "/:id/status",
-  // protect,
-  // adminOnly,
-  updateApplicationStatus
-);
-
-router.delete(
-  "/:id",
-  // protect,
-  // adminOnly,
-  deleteApplication
-);
-
+// Existing admin endpoints retained (keep your existing admin auth middleware here).
+router.get("/stats", controller.getStats);
+router.get("/", controller.getApplications);
+router.get("/:id", controller.getApplication);
+router.put("/:id", controller.updateApplication);
+router.patch("/:id/status", controller.updateApplicationStatus);
+router.delete("/:id", controller.deleteApplication);
 module.exports = router;

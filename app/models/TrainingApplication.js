@@ -1,146 +1,66 @@
 const mongoose = require("mongoose");
 
-const trainingApplicationSchema = new mongoose.Schema(
-  {
-    applicationNo: {
-      type: String,
-      unique: true,
-      sparse: true,
-    },
+const fileSchema = new mongoose.Schema({
+  publicId: String,
+  resourceType: String,
+  originalName: String,
+  format: String,
+  bytes: Number,
+}, { _id: false });
 
-    course: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "TrainingCourse",
-      required: [true, "Course is required"],
-    },
-
-    name: {
-      type: String,
-      required: [true, "Applicant name is required"],
-      trim: true,
-    },
-
-    fatherName: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    motherName: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    gender: {
-      type: String,
-      enum: ["Male", "Female", "Other"],
-      required: [true, "Gender is required"],
-    },
-
-    dob: {
-      type: Date,
-    },
-
-    phone: {
-      type: String,
-      required: [true, "Phone number is required"],
-      trim: true,
-    },
-
-    alternatePhone: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    email: {
-      type: String,
-      trim: true,
-      lowercase: true,
-      default: "",
-    },
-
-    address: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    city: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    state: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    pincode: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    qualification: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    institute: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    passingYear: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    aadhaar: {
-      type: String,
-      trim: true,
-      default: "",
-    },
-
-    photo: {
-      type: String,
-      default: "",
-    },
-
-    aadhaarFile: {
-      type: String,
-      default: "",
-    },
-
-    remarks: {
-      type: String,
-      default: "",
-    },
-
-    status: {
-      type: String,
-      enum: [
-        "Pending",
-        "Approved",
-        "Rejected",
-        "Completed",
-      ],
-      default: "Pending",
-    },
+const trainingApplicationSchema = new mongoose.Schema({
+  applicationId: { type: String, unique: true, index: true },
+  course: { type: String, required: true },
+  batch: { type: String, required: true, index: true },
+  full_name: { type: String, required: true, trim: true },
+  gender: String,
+  dob: Date,
+  mobile: { type: String, required: true, index: true },
+  whatsapp: String,
+  email: { type: String, required: true, lowercase: true, trim: true },
+  address: String,
+  city: String,
+  state: String,
+  pin: String,
+  qualification: String,
+  qualification_other: String,
+  institution: String,
+  pg_year: Number,
+  registration_body: String,
+  registration_number: String,
+  designation: String,
+  workplace: String,
+  theory_level: String,
+  cases_assisted: String,
+  cases_performed: String,
+  box_trainer: String,
+  previous_courses: String,
+  goals: String,
+  accommodation: String,
+  arrival_date: Date,
+  food_preference: String,
+  documents: {
+    doc_pg_degree: fileSchema,
+    doc_registration: fileSchema,
+    doc_photo_id: fileSchema,
+    doc_photo: fileSchema,
+    doc_logbook: fileSchema,
   },
-  {
-    timestamps: true,
-  }
-);
+  declarations: {
+    truthful: Boolean,
+    supervisedParticipation: Boolean,
+    refundPolicy: Boolean,
+    dataConsent: Boolean,
+  },
+  amount: { type: Number, default: 1500000 }, // paise
+  currency: { type: String, default: "INR" },
+  paymentStatus: { type: String, enum: ["PENDING", "PAID", "FAILED", "EXPIRED"], default: "PENDING", index: true },
+  razorpayOrderId: String,
+  razorpayPaymentId: String,
+  razorpaySignature: String,
+  reservationExpiresAt: Date,
+  status: { type: String, enum: ["Pending", "Approved", "Rejected", "Completed"], default: "Pending" },
+  remarks: String,
+}, { timestamps: true });
 
-module.exports = mongoose.model(
-  "TrainingApplication",
-  trainingApplicationSchema
-);
+module.exports = mongoose.models.TrainingApplication || mongoose.model("TrainingApplication", trainingApplicationSchema);
