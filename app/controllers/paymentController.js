@@ -1031,3 +1031,401 @@ exports.markAppointmentPaymentFailed = async (req, res) => {
     );
   }
 };
+
+
+
+// ========================================
+// HOSTED CHECKOUT CALLBACK
+// Razorpay POSTs successful payment details here
+// ========================================
+exports.hostedCheckoutCallback = async (req, res) => {
+  let appointment = null;
+  let orderId = "";
+  let paymentId = "";
+
+  const frontendUrl = (
+    process.env.FRONTEND_URL || "https://dewcarehospital.com"
+  ).replace(/\/+$/, "");
+
+  const redirectToStatus = (status, appointmentId = "") => {
+    const url = new URL(
+      "/appointment/success",
+      frontendUrl
+    );
+
+    if (appointmentId) {
+      url.searchParams.set("id", String(appointmentId));
+    }
+
+    url.searchParams.set("payment", status);
+
+    return res.redirect(303, url.toString());
+  };
+
+  try {
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body || {};
+
+    orderId = razorpay_order_id || "";
+    paymentId = razorpay_payment_id || "";
+
+
+
+    // Find appointment using the Razorpay order ID
+    if (!orderId || !paymentId || !razorpay_signature) {
+  const body = req.body || {};
+  const errorData =
+    body.error && typeof body.error === "object"
+      ? body.error
+      : {};
+
+  const metadata = errorData.metadata || {};
+
+  const failureOrderId =
+    orderId ||
+    metadata.order_id ||
+    body["error[metadata][order_id]"] ||
+    body.order_id ||
+    "";
+
+  const failurePaymentId =
+    paymentId ||
+    metadata.payment_id ||
+    body["error[metadata][payment_id]"] ||
+    "";
+
+  const failureReason =
+    errorData.description ||
+    body["error[description]"] ||
+    body.error_description ||
+    "Razorpay Hosted Checkout payment attempt failed";
+
+  const failedAppointment = failureOrderId
+    ? await Appointment.findOne({
+        razorpayOrderId: failureOrderId,
+      })
+    : null;
+
+  let verifiedFailure = false;
+
+  // Verify actual payment status with Razorpay before
+  // changing the appointment database status.
+  if (failurePaymentId && failureOrderId) {
+    try {
+      const { client } = getRazorpay();
+      const failedPayment = await client.payments.fetch(
+        failurePaymentId
+      );
+
+      verifiedFailure =
+        failedPayment.order_id === failureOrderId &&
+        failedPayment.status === "failed";
+    } catch (verificationError) {
+      console.error(
+        "Hosted failure verification:",
+        verificationError.message
+      );
+    }
+  }
+
+  if (
+    failedAppointment &&
+    verifiedFailure &&
+    failedAppointment.paymentStatus !== "Paid"
+  ) {
+    failedAppointment.paymentStatus = "Failed";
+    failedAppointment.status = "Pending Payment";
+    failedAppointment.paymentFailureReason =
+      String(failureReason).slice(0, 500);
+
+    await failedAppointment.save();
+  }
+
+  await audit({
+    appointmentId: failedAppointment?._id || null,
+    event: "HOSTED_CHECKOUT_FAILURE_CALLBACK",
+    orderId: failureOrderId,
+    paymentId: failurePaymentId,
+    status: verifiedFailure ? "VERIFIED_FAILED" : "PENDING",
+    error: String(failureReason).slice(0, 500),
+    verification: {
+      actualFailureVerified: verifiedFailure,
+    },
+  });
+
+  return redirectToStatus(
+    "pending",
+    failedAppointment?._id || ""
+  );
+}
+
+    appointment = await Appointment.findOne({
+      razorpayOrderId: orderId,
+    });
+
+    if (!appointment) {
+      await audit({
+        event: "HOSTED_CHECKOUT_APPOINTMENT_NOT_FOUND",
+        orderId,
+        paymentId,
+        status: "REJECTED",
+        error: "No appointment found for Razorpay order",
+      });
+
+      return redirectToStatus("pending");
+    }
+
+    // Idempotency: callback may be received more than once
+    if (
+      appointment.paymentStatus === "Paid" &&
+      appointment.razorpayPaymentId === paymentId
+    ) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "HOSTED_CHECKOUT_ALREADY_VERIFIED",
+        orderId,
+        paymentId,
+        status: "VERIFIED",
+      });
+
+      return redirectToStatus(
+        "success",
+        appointment._id
+      );
+    }
+
+    if (appointment.paymentStatus === "Paid") {
+      await audit({
+        appointmentId: appointment._id,
+        event: "HOSTED_CHECKOUT_DUPLICATE_PAYMENT_REJECTED",
+        orderId,
+        paymentId,
+        status: "REJECTED",
+        error: "Appointment already has another recorded payment",
+      });
+
+      return redirectToStatus(
+        "pending",
+        appointment._id
+      );
+    }
+
+    const { client, keySecret } = getRazorpay();
+
+    // Verify Razorpay HMAC signature
+    const expectedSignature = crypto
+      .createHmac("sha256", keySecret)
+      .update(`${orderId}|${paymentId}`)
+      .digest("hex");
+
+    const receivedBuffer = Buffer.from(
+      razorpay_signature,
+      "hex"
+    );
+
+    const expectedBuffer = Buffer.from(
+      expectedSignature,
+      "hex"
+    );
+
+    const signatureValid =
+      /^[a-f0-9]{64}$/i.test(razorpay_signature) &&
+      receivedBuffer.length === expectedBuffer.length &&
+      crypto.timingSafeEqual(
+        receivedBuffer,
+        expectedBuffer
+      );
+
+    if (!signatureValid) {
+      await audit({
+        appointmentId: appointment._id,
+        event: "HOSTED_CHECKOUT_SIGNATURE_FAILED",
+        orderId,
+        paymentId,
+        status: "REJECTED",
+        error: "Invalid Hosted Checkout signature",
+        verification: {
+          signatureValid: false,
+        },
+      });
+
+      return redirectToStatus(
+        "pending",
+        appointment._id
+      );
+    }
+
+    // Fetch actual payment details directly from Razorpay
+    const payment = await client.payments.fetch(paymentId);
+
+    const expectedAmount = Math.round(
+      Number(appointment.paymentAmount) * 100
+    );
+
+    const paymentValid =
+      payment.id === paymentId &&
+      payment.order_id === orderId &&
+      payment.status === "captured" &&
+      payment.captured === true &&
+      Number.isSafeInteger(expectedAmount) &&
+      expectedAmount > 0 &&
+      payment.amount === expectedAmount &&
+      payment.currency === "INR";
+
+    await audit({
+      appointmentId: appointment._id,
+      event: "HOSTED_CHECKOUT_PAYMENT_VERIFICATION",
+      orderId,
+      paymentId,
+      amountPaise: payment.amount,
+      currency: payment.currency,
+      status: paymentValid ? "VERIFIED" : "REJECTED",
+      verification: {
+        signatureValid: true,
+        paymentIdMatched: payment.id === paymentId,
+        orderMatched: payment.order_id === orderId,
+        captured: payment.status === "captured",
+        amountMatched: payment.amount === expectedAmount,
+        currencyMatched: payment.currency === "INR",
+      },
+    });
+
+    if (!paymentValid) {
+      return redirectToStatus(
+        "pending",
+        appointment._id
+      );
+    }
+
+    // Save verified payment and confirm appointment
+    appointment.paymentStatus = "Paid";
+    appointment.status = "Confirmed";
+    appointment.razorpayPaymentId = paymentId;
+    appointment.paidAt = new Date();
+    appointment.paymentFailureReason = "";
+
+    await appointment.save();
+
+    await audit({
+      appointmentId: appointment._id,
+      event: "HOSTED_CHECKOUT_PAYMENT_SUCCESS",
+      orderId,
+      paymentId,
+      amountPaise: payment.amount,
+      currency: payment.currency,
+      status: "DB_SAVED",
+      response: {
+        paymentStatus: appointment.paymentStatus,
+        appointmentStatus: appointment.status,
+        paidAt: appointment.paidAt,
+      },
+    });
+
+    console.log(
+      `[HOSTED CHECKOUT] Payment verified for appointment ${appointment._id}`
+    );
+
+    return redirectToStatus(
+      "success",
+      appointment._id
+    );
+  } catch (error) {
+    console.error(
+      "Hosted Checkout callback error:",
+      error.message
+    );
+
+    await audit({
+      appointmentId: appointment?._id || null,
+      event: "HOSTED_CHECKOUT_CALLBACK_ERROR",
+      orderId,
+      paymentId,
+      status: "FAILED",
+      error: error.message || "Hosted Checkout callback failed",
+    });
+
+    return redirectToStatus(
+      "pending",
+      appointment?._id || ""
+    );
+  }
+};
+
+// ========================================
+// HOSTED CHECKOUT CANCEL
+// Do not mark payment failed just because
+// the customer returned from the checkout.
+// ========================================
+exports.hostedCheckoutCancel = async (req, res) => {
+  const frontendUrl = (
+    process.env.FRONTEND_URL || "https://dewcarehospital.com"
+  ).replace(/\/+$/, "");
+
+  try {
+    const appointmentId =
+      req.query?.appointmentId || "";
+
+    let appointment = null;
+
+    if (
+      appointmentId &&
+      mongoose.Types.ObjectId.isValid(appointmentId)
+    ) {
+      appointment = await Appointment.findById(
+        appointmentId
+      );
+    }
+
+    const orderId =
+      req.query?.razorpay_order_id ||
+      req.query?.order_id ||
+      "";
+
+    if (!appointment && orderId) {
+      appointment = await Appointment.findOne({
+        razorpayOrderId: orderId,
+      });
+    }
+
+    await audit({
+      appointmentId: appointment?._id || null,
+      event: "HOSTED_CHECKOUT_CANCEL_RETURN",
+      orderId: orderId || appointment?.razorpayOrderId || "",
+      status: "PENDING",
+      error: "Customer returned from Hosted Checkout; payment not automatically marked failed",
+    });
+
+    const url = new URL(
+      "/appointment/success",
+      frontendUrl
+    );
+
+    if (appointment?._id) {
+      url.searchParams.set(
+        "id",
+        appointment._id.toString()
+      );
+    }
+
+    url.searchParams.set("payment", "pending");
+
+    return res.redirect(303, url.toString());
+  } catch (error) {
+    console.error(
+      "Hosted Checkout cancel error:",
+      error.message
+    );
+
+    const url = new URL(
+      "/appointment/success",
+      frontendUrl
+    );
+
+    url.searchParams.set("payment", "pending");
+
+    return res.redirect(303, url.toString());
+  }
+};
