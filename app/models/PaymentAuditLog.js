@@ -38,17 +38,19 @@ const paymentAuditLogSchema = new mongoose.Schema(
     },
 
     status: {
-      type: String,
-      enum: [
-        "REQUESTED",
-        "SUCCESS",
-        "FAILED",
-        "DB_SAVED",
-        "VERIFIED",
-        "REJECTED",
-      ],
-      default: "REQUESTED",
-    },
+  type: String,
+  enum: [
+    "REQUESTED",
+    "SUCCESS",
+    "FAILED",
+    "DB_SAVED",
+    "VERIFIED",
+    "REJECTED",
+    "PENDING",
+    "VERIFIED_FAILED",
+  ],
+  default: "REQUESTED",
+},
 
     request: {
       type: mongoose.Schema.Types.Mixed,
