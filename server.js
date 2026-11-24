@@ -29,6 +29,7 @@ const paymentRoutes = require("./app/routes/paymentRoutes");
 const reportsRoutes = require("./app/routes/reportsRoutes");
 const reportRoutes = require("./app/routes/reportRoutes");
 const adminRoutes = require("./app/routes/adminRoutes");
+const jobApplicationRoutes = require("./app/routes/jobApplicationRoutes");
 
 // Create Express app
 const app = express();
@@ -116,6 +117,9 @@ app.use(
 );
 // Admin Payment Audit
 app.use("/api/admin", adminRoutes);
+
+// Public Job Applications
+app.use("/api/job-applications", jobApplicationRoutes);
 
 /* =========================================================
    404 Handler
